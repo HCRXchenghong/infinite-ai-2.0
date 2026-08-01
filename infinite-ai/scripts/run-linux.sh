@@ -10,24 +10,27 @@ export XMODIFIERS="${XMODIFIERS:-@im=ibus}"
 export LC_CTYPE="${LC_CTYPE:-${LANG:-C.UTF-8}}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Prefer the freshly built source tree.  The old launcher searched the
+# compatibility archive first, which made a local checkout silently start an
+# outdated binary after every rebuild.
+binary="${INFINITE_AI_BINARY:-}"
+if [[ -z "$binary" ]]; then
+  binary="$repo_root/target/release/infinite-ai"
+fi
+if [[ ! -x "$binary" ]]; then
+  binary="$repo_root/crates/agent-gui/src-tauri/target/release/infinite-ai"
+fi
+if [[ -x "$binary" ]]; then
+  exec "$binary" "$@"
+fi
+
 appimage="${INFINITE_AI_APPIMAGE:-}"
 if [[ -z "$appimage" ]]; then
   appimage="$(find "$repo_root/../releases/linux" -maxdepth 1 -type f -name 'Infinite-AI-*.AppImage' -print -quit 2>/dev/null || true)"
 fi
-# The repository also keeps the historical v1.2.3 AppImage as a compatibility
-# archive.  It is intentionally a last-resort fallback and is not presented
-# as a newly branded Infinite AI build.
-if [[ -z "$appimage" ]]; then
-  appimage="$(find "$repo_root/../releases/linux" -maxdepth 1 -type f -name 'LiveAgent-v1.2.3-*.AppImage' -print -quit 2>/dev/null || true)"
-fi
-
 if [[ -n "$appimage" && -x "$appimage" ]]; then
   exec "$appimage" "$@"
-fi
-
-binary="$repo_root/crates/agent-gui/src-tauri/target/release/infinite-ai"
-if [[ -x "$binary" ]]; then
-  exec "$binary" "$@"
 fi
 
 cat >&2 <<'EOF'

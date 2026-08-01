@@ -2,11 +2,27 @@
 
 这里保存用于迁移和回滚的 LiveAgent v1.2.3 兼容发行包，按操作系统分目录：
 
-- `linux/`：Linux x86_64 AppImage（本机测试包；文件超过 GitHub 普通仓库 100 MiB 限制，不纳入 Git）
+- `linux/`：Linux x86_64 安装包和兼容归档
 - `windows/`：Windows x64 安装包、MSI 和便携版
 - `macos/`：macOS Intel 与 Apple Silicon 安装包
 
 这些文件是历史构建产物，包内仍可能显示 LiveAgent 名称；它们没有被伪装成已经重新编译的 Infinite AI。新的 Infinite AI 构建会使用仓库内的品牌和图标资源，并通过发布流水线生成。
+
+## Infinite AI Debian 包
+
+`linux/Infinite-AI-1.3.0-dev.0-ubuntu22.04-amd64.deb` 是当前源码构建的 Ubuntu 22.04 x86_64 包：
+
+```bash
+sudo dpkg -i Infinite-AI-1.3.0-dev.0-ubuntu22.04-amd64.deb
+```
+
+安装前请确认系统已安装 WebKitGTK 4.1、GTK 3 和 Ayatana AppIndicator 运行库。当前 Tauri 2 桌面运行时使用 WebKitGTK 4.1，而 Ubuntu 20.04 官方仓库只有 WebKitGTK 4.0，因此这个包不会冒充支持 Ubuntu 20.04。20.04 专用包需要以 Focal 基线重新构建 WebKitGTK 运行时后再发布；在该包发布前请使用源码或 AppImage 方案，不要在 20.04 上强行安装此包。
+
+SHA-256：
+
+```text
+cc41d9f44b14eda1b9f4d72b912d2c6fb8fb27fc3425c2c908495f3bb39af67f  linux/Infinite-AI-1.3.0-dev.0-ubuntu22.04-amd64.deb
+```
 
 下载后请先校验 SHA-256：
 
