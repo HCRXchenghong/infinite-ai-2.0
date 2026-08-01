@@ -30,7 +30,7 @@ GATEWAY_DOCKER_IMAGE ?= liveagent-gateway:local
 RELEASE_TAG ?=
 MODEL_CATALOG_GENERATED_FILES := $(AGENT_GUI_DIR)/src/lib/models/catalog.generated.ts $(AGENT_GATEWAY_WEB_DIR)/src/lib/models/catalog.generated.ts
 
-.PHONY: all dev build desktop-build-macos desktop-build-macos-release desktop-build-macos-intel desktop-build-macos-m desktop-build-windows desktop-build-linux github-release-main check-github-release-tag help
+.PHONY: all dev build desktop-build-macos desktop-build-macos-release desktop-build-macos-intel desktop-build-macos-m desktop-build-windows desktop-build-linux desktop-build-linux-portable-deb github-release-main check-github-release-tag help
 .PHONY: dev-gateway dev-webui ensure-webui-embed-stub
 .PHONY: proto proto-check webui gateway-build gateway-docker-build gateway-docker-run gateway-docker-smoke build-linux build-linux-amd build-linux-arm
 .PHONY: clean update-model-catalog check-rust-target-% check-macos-signing-identity check-macos-notary-profile desktop-store-macos-notary-profile desktop-wait-macos-notary desktop-staple-macos desktop-verify-macos
@@ -74,6 +74,15 @@ desktop-build-windows: check-rust-target-$(DESKTOP_WINDOWS_TARGET)
 
 desktop-build-linux: check-rust-target-$(DESKTOP_LINUX_TARGET)
 	pnpm --dir $(AGENT_GUI_DIR) tauri build --target $(DESKTOP_LINUX_TARGET) --bundles $(DESKTOP_LINUX_BUNDLES)
+
+# Repackage the verified AppImage with a private loader so the installed
+# package works on both Ubuntu 20.04 (glibc 2.31) and Ubuntu 22.04 (glibc
+# 2.35). Set LINUX_APPIMAGE when using a different build output.
+desktop-build-linux-portable-deb:
+	@set -e; \
+	appimage="$${LINUX_APPIMAGE:-../../releases/linux/Infinite-AI-1.3.0-dev.0-x86_64.AppImage}"; \
+	output="$${LINUX_PORTABLE_DEB:-../../releases/linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb}"; \
+	"$(CURDIR)/scripts/release/create-universal-linux-deb.sh" "$$appimage" "$$output" "$${LIVEAGENT_APP_VERSION:-1.3.0-dev.0}"
 
 github-release-main: check-github-release-tag
 	git fetch origin --tags

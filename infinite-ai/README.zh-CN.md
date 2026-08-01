@@ -132,7 +132,7 @@ Infinite AI 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大�
 |---|---|
 | macOS | Intel(x64)与 Apple Silicon(aarch64)双架构 |
 | Windows | x64,需 WebView2 运行时(Windows 11 已内置) |
-| Linux | x86_64,需 WebKitGTK 4.1(Ubuntu 22.04+ / Debian 12+ 等) |
+| Linux | x86_64；推荐使用 Ubuntu 20.04/22.04 便携 DEB，直接 `sudo dpkg -i` 安装 |
 
 ### macOS 用户
 
@@ -160,7 +160,8 @@ Infinite AI 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大�
 | 格式 | 适用发行版 | 安装方式 |
 |---|---|---|
 | AppImage | 任意发行版 | `chmod +x` 后直接运行 |
-| DEB | Debian / Ubuntu 系 | `sudo dpkg -i Infinite AI-<版本>-Linux-x86_64.deb` |
+| DEB（Ubuntu 20.04/22.04 便携包） | Ubuntu 20.04、22.04 x86_64 | `sudo dpkg -i Infinite-AI-<版本>-ubuntu20.04-22.04-amd64.deb` |
+| DEB（标准 Tauri 包） | Ubuntu 22.04+ / Debian 12+ | `sudo dpkg -i Infinite-AI-<版本>-Linux-x86_64.deb` |
 | RPM | Fedora / openSUSE 系 | `sudo rpm -i Infinite AI-<版本>-Linux-x86_64.rpm` |
 
 ### 需要远程访问? 部署 Gateway

@@ -8,21 +8,23 @@
 
 这些文件是历史构建产物，包内仍可能显示 LiveAgent 名称；它们没有被伪装成已经重新编译的 Infinite AI。新的 Infinite AI 构建会使用仓库内的品牌和图标资源，并通过发布流水线生成。
 
-## Infinite AI Debian 包
+## Infinite AI Linux 包
 
-`linux/Infinite-AI-1.3.0-dev.0-ubuntu22.04-amd64.deb` 是当前源码构建的 Ubuntu 22.04 x86_64 包：
+`linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb` 是当前 Infinite AI 的便携 Debian 包，目标是 Ubuntu 20.04 和 22.04 x86_64。它把 WebKitGTK 运行时放在应用目录中，包本身没有 `libwebkit2gtk-4.1` 依赖，因此在两套系统上都可以直接执行 `dpkg -i`：
 
 ```bash
-sudo dpkg -i Infinite-AI-1.3.0-dev.0-ubuntu22.04-amd64.deb
+sudo dpkg -i Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb
 ```
 
-安装前请确认系统已安装 WebKitGTK 4.1、GTK 3 和 Ayatana AppIndicator 运行库。当前 Tauri 2 桌面运行时使用 WebKitGTK 4.1，而 Ubuntu 20.04 官方仓库只有 WebKitGTK 4.0，因此这个包不会冒充支持 Ubuntu 20.04。20.04 专用包需要以 Focal 基线重新构建 WebKitGTK 运行时后再发布；在该包发布前请使用源码或 AppImage 方案，不要在 20.04 上强行安装此包。
+安装器保留主机的 X11/Wayland/Mesa 驱动选择，适合带桌面环境的 Ubuntu。安装后从应用菜单启动，或运行 `infinite-ai`；中文输入会自动使用 IBus/XIM 回退。该包仅提供 amd64 架构，服务器没有图形桌面时请使用网关服务而不是桌面端。
 
 SHA-256：
 
 ```text
-cc41d9f44b14eda1b9f4d72b912d2c6fb8fb27fc3425c2c908495f3bb39af67f  linux/Infinite-AI-1.3.0-dev.0-ubuntu22.04-amd64.deb
+570919577bc7c6e7db1a0eab0bb6dfff42437d6d03eee944bdaf97e989c32764  linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb
 ```
+
+如果选择标准 Tauri `.deb`，它只适用于 Ubuntu 22.04 及更新系统；20.04 请使用上面的便携包。
 
 下载后请先校验 SHA-256：
 

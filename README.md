@@ -10,7 +10,8 @@ Infinite AI 2.0 是一个统一仓库，包含：
 
 Linux 桌面端可以用 `infinite-ai/scripts/run-linux.sh` 启动。脚本优先运行当前源码构建的 `target/release/infinite-ai`，不再悄悄回退到旧兼容包；脚本会为 WebKitGTK 设置 IBus/XIM 输入法环境，解决中文组合输入无法提交的问题。
 
-当前 Debian 构建产物位于 `releases/linux/Infinite-AI-1.3.0-dev.0-ubuntu22.04-amd64.deb`。它使用 Tauri 2 的 WebKitGTK 4.1 运行时，适用于 Ubuntu 22.04；Ubuntu 20.04 官方仓库只有 WebKitGTK 4.0，不能把 22.04 包宣称为 20.04 可运行版本，Focal 专用运行时需要单独构建后再发布。
+Linux 当前提供一个可直接安装的便携 Debian 包：
+`releases/linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb`。它把 WebKitGTK 运行时和兼容加载器放在应用目录中，不依赖 Ubuntu 20.04 不提供的 WebKitGTK 4.1，因此 Ubuntu 20.04/22.04 都可以直接执行 `sudo dpkg -i`。需要图形桌面和主机的 X11/Wayland/Mesa 驱动；无桌面服务器请部署 `friendgate` 网关。
 
 ## 开发环境
 
