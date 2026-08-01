@@ -22,7 +22,7 @@ source_appimage="$(realpath "$1")"
 output_deb="$(realpath -m "$2")"
 version="${3:-1.3.0-dev.0}"
 
-for command_name in dpkg-deb mktemp patchelf realpath cp find install; do
+for command_name in dpkg-deb mktemp patchelf realpath cp find install readelf; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "create-universal-linux-deb: missing $command_name" >&2
     exit 1
@@ -70,6 +70,12 @@ for library in \
   cp -L "$library" "$private_lib/"
 done
 
+# WebKitGTK records `$ORIGIN` as its own RUNPATH. Keep the C++ runtime in
+# that directory as well, so its transitive dependencies cannot fall back to
+# Ubuntu 20.04's older libstdc++ before the private loader's RPATH is applied.
+cp -L /lib/x86_64-linux-gnu/libstdc++.so.6 "$runtime_root/app/usr/lib/"
+cp -L /lib/x86_64-linux-gnu/libgcc_s.so.1 "$runtime_root/app/usr/lib/"
+
 # These are the small set of desktop libraries normally supplied by a stock
 # Ubuntu installation but not bundled by linuxdeploy.  Keeping them in the
 # package makes a clean desktop install deterministic while leaving hardware
@@ -79,8 +85,13 @@ for library in \
   /lib/x86_64-linux-gnu/libexpat.so.1 \
   /lib/x86_64-linux-gnu/libfreetype.so.6 \
   /lib/x86_64-linux-gnu/libharfbuzz.so.0 \
-  /lib/x86_64-linux-gnu/libfribidi.so.0; do
-  [[ -e "$library" ]] && cp -L "$library" "$private_lib/"
+  /lib/x86_64-linux-gnu/libfribidi.so.0 \
+  /lib/x86_64-linux-gnu/libgbm.so.1 \
+  /lib/x86_64-linux-gnu/libdrm.so.2; do
+  if [[ -e "$library" ]]; then
+    cp -L "$library" "$private_lib/"
+    cp -L "$library" "$runtime_root/app/usr/lib/"
+  fi
 done
 
 # AppRun.wrapped uses /proc/self/exe to locate its AppDir.  Patching its
@@ -89,8 +100,27 @@ done
 interpreter="/opt/infinite-ai/app/usr/lib/infinite-ai-runtime/ld-linux-x86-64.so.2"
 patchelf --set-interpreter "$interpreter" "$runtime_root/app/AppRun.wrapped"
 patchelf --set-interpreter "$interpreter" "$runtime_root/app/usr/bin/infinite-ai"
-patchelf --set-rpath "/opt/infinite-ai/app/usr/lib/infinite-ai-runtime:/opt/infinite-ai/app/usr/lib:/opt/infinite-ai/app/usr/lib/x86_64-linux-gnu" \
+patchelf --force-rpath --set-rpath "/opt/infinite-ai/app/usr/lib/infinite-ai-runtime:/opt/infinite-ai/app/usr/lib:/opt/infinite-ai/app/usr/lib/x86_64-linux-gnu" \
   "$runtime_root/app/AppRun.wrapped" "$runtime_root/app/usr/bin/infinite-ai"
+
+# WebKitGTK launches these helpers as separate processes. Patch their
+# interpreters too; otherwise they would inherit Ubuntu 20.04's loader and
+# fail before the first page is rendered.
+while IFS= read -r -d '' executable; do
+  if readelf -l "$executable" 2>/dev/null | grep -q 'Requesting program interpreter'; then
+    patchelf --set-interpreter "$interpreter" "$executable"
+    patchelf --force-rpath --set-rpath "/opt/infinite-ai/app/usr/lib/infinite-ai-runtime:/opt/infinite-ai/app/usr/lib:/opt/infinite-ai/app/usr/lib/x86_64-linux-gnu" "$executable"
+  fi
+done < <(find "$runtime_root/app/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1" -type f -perm -0100 -print0 2>/dev/null)
+
+# The WebKit shared objects themselves use an `$ORIGIN` RUNPATH. Add a
+# transitive RPATH to every bundled shared object so glibc/libm/libstdc++ are
+# resolved from the private runtime even when a WebKit child starts first.
+while IFS= read -r -d '' library; do
+  if readelf -d "$library" 2>/dev/null | grep -q 'NEEDED'; then
+    patchelf --force-rpath --set-rpath "/opt/infinite-ai/app/usr/lib/infinite-ai-runtime:/opt/infinite-ai/app/usr/lib:/opt/infinite-ai/app/usr/lib/x86_64-linux-gnu" "$library"
+  fi
+done < <(find "$runtime_root/app/usr/lib" -type f \( -name '*.so' -o -name '*.so.*' \) -print0)
 
 launcher="$package_root/usr/bin/infinite-ai"
 install -m 0755 /dev/null "$launcher"
@@ -107,9 +137,7 @@ export QT_IM_MODULE="${QT_IM_MODULE:-ibus}"
 export XMODIFIERS="${XMODIFIERS:-@im=ibus}"
 export LC_CTYPE="${LC_CTYPE:-${LANG:-C.UTF-8}}"
 export APPDIR="$app_root"
-private_lib="$app_root/usr/lib/infinite-ai-runtime"
-export LD_LIBRARY_PATH="$private_lib:$app_root/usr/lib:$app_root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$app_root/AppRun" "$@"
+exec "$app_root/AppRun.wrapped" "$@"
 EOF
 
 control_dir="$package_root/DEBIAN"

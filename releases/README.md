@@ -21,7 +21,7 @@ sudo dpkg -i Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb
 SHA-256：
 
 ```text
-570919577bc7c6e7db1a0eab0bb6dfff42437d6d03eee944bdaf97e989c32764  linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb
+6a7f560555c4a98e120f3d710dd56ecbe3a3d6f16dbe14fb8cae461440bf0fe2  linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb
 ```
 
 如果选择标准 Tauri `.deb`，它只适用于 Ubuntu 22.04 及更新系统；20.04 请使用上面的便携包。
