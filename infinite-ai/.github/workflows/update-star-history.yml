@@ -1,0 +1,68 @@
+name: Update Star History & Contributors
+
+on:
+  schedule:
+    # Daily at 01:17 UTC (09:17 Beijing time). GitHub Actions cron is UTC-only.
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-star-history
+  cancel-in-progress: true
+
+jobs:
+  update:
+    if: github.repository == 'HCRXchenghong/infinite-ai-2.0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Collect stargazer history
+        env:
+          GH_TOKEN: ${{ secrets.STARGAZER_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            --header "Accept: application/vnd.github.star+json" \
+            "repos/${GITHUB_REPOSITORY}/stargazers?per_page=100" \
+            > "$RUNNER_TEMP/stargazers.json"
+          python3 scripts/update-star-history.py \
+            "$RUNNER_TEMP/stargazers.json" \
+            docs/images/star-history-light.svg \
+            docs/images/star-history-dark.svg
+
+      - name: Collect contributors
+        env:
+          GH_TOKEN: ${{ secrets.STARGAZER_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/contributors?per_page=100" \
+            > "$RUNNER_TEMP/contributors.json"
+          python3 scripts/update-contributors.py \
+            "$RUNNER_TEMP/contributors.json" \
+            docs/images/contributors.svg
+
+      - name: Check chart files
+        run: |
+          set -euo pipefail
+          test -s docs/images/star-history-light.svg
+          test -s docs/images/star-history-dark.svg
+          test -s docs/images/contributors.svg
+
+      - name: Commit and push changes
+        run: |
+          set -euo pipefail
+          git add README.md README.zh-CN.md docs/images/star-history-light.svg docs/images/star-history-dark.svg docs/images/contributors.svg
+          if git diff --cached --quiet; then
+            echo "README charts are unchanged."
+            exit 0
+          fi
+          git config user.name "coder-hhx"
+          git config user.email "houhaixu_email@163.com"
+          git commit -m "docs: refresh star history and contributors charts"
+          git push

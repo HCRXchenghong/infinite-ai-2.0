@@ -1,0 +1,32 @@
+<aside class="toc"><div class="toc-title">ON THIS PAGE</div><a href="#connection">连接信息</a><a href="#config">config.toml</a><a href="#auth">auth.json</a><a href="#cli">Codex CLI</a><a href="#vscode">VS Code 插件</a><a href="#notes">安全说明</a></aside>
+<article class="markdown-body guide-content">
+  <div class="guide-heading"><div><p class="eyebrow">AUTHORIZED GUIDE</p><h1>FriendGate × Codex</h1><p id="welcome" class="lead"></p></div><button id="logoutBtn" class="button ghost">退出指南</button></div>
+  <div class="callout"><strong>已验证访问</strong><span>以下代码会自动填入你刚才使用的 Key、设备凭证和 API Base URL。复制前请确认当前设备安全。</span></div>
+
+  <h2 id="connection">连接信息</h2>
+  <p>网关地址使用 OpenAI Responses 兼容协议。下方模型来自管理员刚刚同步的官方模型快照，配置会随选择立即更新。</p>
+  <dl class="connection-grid"><div><dt>API Base URL</dt><dd id="baseValue"></dd></div><div><dt>API Key</dt><dd id="keyValue"></dd></div><div><dt>设备凭证</dt><dd id="deviceValue"></dd></div><div><dt>当前模型</dt><dd id="modelValue">读取中…</dd></div></dl>
+
+  <h2 id="config">配置 <code>~/.codex/config.toml</code></h2>
+  <p>Codex 官方文档规定用户级配置放在 <code>~/.codex/config.toml</code>。选择模型后，下面的内容已经是完整配置，直接复制即可。<code>http_headers</code> 仅在本凭证绑定设备时用于发送设备凭证。</p>
+  <div class="model-picker"><label for="modelSelect">选择模型</label><div class="model-picker-row"><select id="modelSelect" aria-describedby="modelStatus"><option value="">正在读取官方模型…</option></select><span id="modelStatus" class="model-status" role="status"></span></div></div>
+  <div class="code-card"><div class="code-head"><span>config.toml</span><button id="tomlCopy" class="copy button ghost" data-copy="tomlCode">复制</button></div><pre><code id="tomlCode"></code></pre></div>
+
+  <h2 id="auth">配置 <code>~/.codex/auth.json</code></h2>
+  <p>FriendGate provider 使用上方配置里的 <code>FRIENDGATE_API_KEY</code> 环境变量。<code>auth.json</code> 是 Codex 的可选 API Key 缓存；为确保自定义 provider 直接生效，请复制下面的 Linux / macOS 片段，它会设置环境变量后启动 Codex。</p>
+  <div class="code-card"><div class="code-head"><span>auth.json（可选缓存）</span><button id="authCopy" class="copy button ghost" data-copy="authCode">复制</button></div><pre><code id="authCode"></code></pre></div>
+  <div class="code-card"><div class="code-head"><span>Linux / macOS（可直接运行）</span><button id="shellCopy" class="copy button ghost" data-copy="shellCode">复制</button></div><pre><code id="shellCode"></code></pre></div>
+
+  <h2 id="cli">下载和使用 Codex CLI</h2>
+  <ol><li>安装 Node.js 18 或更新版本。</li><li>安装官方 CLI：<code>npm install -g @openai/codex</code>；也可以不安装，直接运行 <code>npx @openai/codex</code>。</li><li>完成配置后，在项目目录执行 <code>codex</code>。如需确认网关是否可达，可先执行 <code>curl -H "Authorization: Bearer &lt;你的 Key&gt;" &lt;Base URL&gt;/models</code>。</li></ol>
+  <p>官方入口：<a href="https://developers.openai.com/codex" rel="noopener noreferrer" target="_blank">developers.openai.com/codex</a>。CLI 的版本和可用模型由官方及你的 ChatGPT 账号权限决定。</p>
+  <p>需要官方桌面软件时，从同一官方入口下载适用于 macOS / Windows 的 Codex app；安装后也可以在终端执行 <code>codex app</code> 打开桌面应用。桌面应用的登录、版本和功能由 OpenAI 官方控制，本网关只负责 API 连接。</p>
+
+  <h2 id="vscode">在 VS Code 中使用 Codex 插件</h2>
+  <ol><li>在 VS Code 扩展市场安装官方 <strong>Codex</strong> 扩展（发布者 OpenAI）。</li><li>让插件使用与 CLI 相同的用户级 <code>~/.codex/config.toml</code>；如果插件提供独立的 API Base URL / API Key 设置，则填入本页显示的三项连接信息。</li><li>打开项目文件夹后，从侧边栏启动 Codex。首次使用时按插件提示重新加载窗口。</li></ol>
+  <p><a href="https://marketplace.visualstudio.com/items?itemName=openai.chatgpt" rel="noopener noreferrer" target="_blank">打开 VS Code 扩展市场</a> · <a href="https://developers.openai.com/learn/codex" rel="noopener noreferrer" target="_blank">官方 IDE 指南</a></p>
+
+  <h2 id="notes">安全说明</h2>
+  <ul><li>Key 和设备凭证等同于密码，不要提交到 Git、截图公开区或聊天群。</li><li>海报的隐藏签名只用于确认图片由本系统生成；图片上传不会绕过 Key 停用、删除或 IP/设备鉴权。</li><li>本页面不被搜索引擎收录，并通过响应头和 CSP 限制缓存、爬虫和跨站提交。</li><li>如果 Key 被撤销，请回到管理员获取新邀请；旧配置不会自动恢复。</li></ul>
+  <footer class="guide-footer">FriendGate Lite · 私有配置指南 · <span id="sessionStatus">会话有效期 24 小时</span></footer>
+</article>

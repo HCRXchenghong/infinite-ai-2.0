@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
+  <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
+  <meta name="theme-color" content="#f6f8fa">
+  <title>FriendGate · Codex 配置指南</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/guide.css?v=20260801-guide-v3">
+</head>
+<body>
+  <header class="site-header"><div class="header-inner"><a class="brand" href="/">FriendGate</a><span class="repo-mark">/ codex-setup</span><span class="private-badge">PRIVATE GUIDE</span></div></header>
+  <main class="layout">
+    <section id="gate" class="gate markdown-body">
+      <div class="gate-icon">FG</div>
+      <p class="eyebrow">PRIVATE CONFIGURATION GUIDE</p>
+      <h1>配置你的 Codex 连接</h1>
+      <p class="lead">此页面只对已授权的 FriendGate Key 开放。输入 Key，或上传领取时下载的凭证海报；海报中的隐藏签名会自动填充 Key 和设备凭证。</p>
+      <form id="keyForm" class="auth-form">
+        <label for="keyInput">API Key</label>
+        <div class="input-row"><input id="keyInput" autocomplete="off" spellcheck="false" placeholder="sk-fg_…" required><button type="submit" class="button primary">验证 Key</button></div>
+      </form>
+      <div class="divider"><span>或者</span></div>
+      <label class="upload-box" for="posterInput"><input id="posterInput" type="file" accept="image/png"><strong>上传凭证海报 PNG</strong><span>只接受 FriendGate 生成的原始 PNG 图片</span></label>
+      <p id="gateMessage" class="message hidden" role="alert"></p>
+      <p class="security-note">Key 停用或删除后立即失效。错误尝试会记录来源 IP；24 小时内超过 5 次将暂时封禁，32 小时内超过 10 次将永久封禁。</p>
+    </section>
+
+    <section id="guide" class="guide-shell hidden"><div id="guideContent"></div></section>
+  </main>
+  <script src="/guide.js?v=20260801-guide-v3" defer></script>
+</body>
+</html>

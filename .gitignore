@@ -1,0 +1,32 @@
+# 本机运行时与下载缓存
+liveagent-runtime/
+# Linux AppImages exceed GitHub's regular 100 MiB blob limit. Keep locally
+# for testing; publish them through GitHub Releases or an artifact store.
+releases/linux/*.AppImage
+releases/**/*.part
+releases/**/*.tmp
+
+# 常见构建产物
+**/node_modules/
+**/target/
+**/dist/
+**/.next/
+**/coverage/
+**/.cache/
+
+# 本机配置与密钥
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db
+
+# 编辑器与系统文件
+.DS_Store
+.idea/
+.vscode/settings.json

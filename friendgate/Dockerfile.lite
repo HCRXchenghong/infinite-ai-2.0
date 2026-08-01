@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1.7
+ARG GO_IMAGE=golang:1.26.0-alpine
+ARG ALPINE_IMAGE=alpine:3.22
+
+FROM ${GO_IMAGE} AS builder
+ARG TARGETOS
+ARG TARGETARCH
+ARG GOPROXY=https://goproxy.cn,direct
+ARG GOSUMDB=sum.golang.google.cn
+ENV GOPROXY=${GOPROXY} GOSUMDB=${GOSUMDB}
+WORKDIR /src
+COPY lite/go.mod lite/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY lite/ ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/friendgate ./cmd/server
+
+FROM ${ALPINE_IMAGE}
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -S -g 10001 friendgate && \
+    adduser -S -D -H -u 10001 -G friendgate friendgate && \
+    mkdir -p /data && chown friendgate:friendgate /data
+WORKDIR /app
+COPY --from=builder /out/friendgate /app/friendgate
+USER 10001:10001
+VOLUME ["/data"]
+EXPOSE 8080 8081 8082 8083
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget -q -T 3 -O /dev/null http://127.0.0.1:8080/health || exit 1
+ENTRYPOINT ["/app/friendgate"]

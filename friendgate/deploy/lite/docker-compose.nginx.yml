@@ -1,0 +1,7 @@
+services:
+  friendgate:
+    volumes:
+      - ${LITE_NGINX_HOST_PATH:-/etc/nginx}:/host-nginx:ro
+      # Preserve absolute links such as /etc/nginx/sites-available/... while
+      # the monitored roots themselves stay under /host-nginx.
+      - ${LITE_NGINX_HOST_PATH:-/etc/nginx}:/etc/nginx:ro

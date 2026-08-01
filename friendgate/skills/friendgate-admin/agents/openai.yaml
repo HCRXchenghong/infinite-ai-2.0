@@ -1,0 +1,7 @@
+interface:
+  display_name: "FriendGate Admin"
+  short_description: "Manage FriendGate admin accounts and settings"
+  default_prompt: "Use $friendgate-admin to inspect and manage FriendGate backend accounts safely."
+
+policy:
+  allow_implicit_invocation: true

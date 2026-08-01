@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#183f58">
+  <title>FriendGate · 管理后台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/element-plus.css">
+  <link rel="stylesheet" href="/admin.css?v=20260801-person-logo-v1">
+  <link rel="stylesheet" href="/admin-theme.css?v=20260728-account-model-backup-v3">
+</head>
+<body>
+  <div id="boot-fallback" class="boot-fallback" role="status" aria-live="polite">
+    <strong>管理后台正在加载</strong>
+    <span data-boot-detail>如果此提示持续显示，请刷新页面并检查本地前端静态资源。</span>
+  </div>
+  <div id="app" v-cloak>
+    <section v-if="!bootstrapped" class="setup-shell">
+      <div class="setup-card"><div class="setup-brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg></span><div><strong>正在验证后台状态</strong><span>读取管理员会话与 2FA 初始化状态</span></div></div></div>
+    </section>
+    <section v-else-if="setupRequired" class="setup-shell">
+      <div class="setup-card">
+        <div class="setup-brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg></span><div><strong>创建后台管理员</strong><span>此入口完成后将永久关闭</span></div></div>
+        <el-steps :active="setupStage" finish-status="success" align-center class="setup-steps"><el-step title="创建账号"></el-step><el-step title="绑定 2FA"></el-step><el-step title="完成"></el-step></el-steps>
+        <div v-if="setupStage===0" class="setup-form">
+          <el-alert title="请使用服务器部署时设置的初始化口令。管理员创建完成后，不能再次从此入口创建账号。" type="warning" :closable="false" show-icon></el-alert>
+          <el-form label-position="top">
+            <el-form-item label="初始化口令"><el-input v-model="setupForm.initialization_password" type="password" show-password autocomplete="current-password"></el-input></el-form-item>
+            <el-form-item label="新管理员账号"><el-input v-model="setupForm.username" maxlength="64" autocomplete="username"></el-input></el-form-item>
+            <el-form-item label="新管理员密码"><el-input v-model="setupForm.password" type="password" show-password maxlength="256" autocomplete="new-password" placeholder="12–256 字节"></el-input></el-form-item>
+            <el-form-item label="确认新密码"><el-input v-model="setupForm.confirm" type="password" show-password maxlength="256" autocomplete="new-password"></el-input></el-form-item>
+            <el-button type="primary" class="full-button" :loading="setupLoading" @click="startSetup">创建并绑定 Microsoft 2FA</el-button>
+          </el-form>
+        </div>
+        <div v-else-if="setupStage===1" class="totp-bind">
+          <div class="qr-panel"><img :src="setupResult.qr_data_url" alt="Microsoft Authenticator TOTP 二维码"><span>使用 Microsoft Authenticator 扫描</span></div>
+          <div class="totp-instructions"><h2>绑定动态验证码</h2><p>在 Microsoft Authenticator 中选择“其他账户”，扫描左侧二维码，然后输入当前 6 位验证码。</p><div class="secret-backup"><span>无法扫码时手动输入</span><code>{{ setupResult.secret }}</code><el-button size="small" @click="copyText(setupResult.secret)">复制密钥</el-button></div><el-form label-position="top"><el-form-item label="6 位动态验证码"><el-input v-model="setupForm.totp_code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" @keyup.enter="completeSetup"></el-input></el-form-item><el-button type="primary" :loading="setupLoading" @click="completeSetup">验证并完成创建</el-button></el-form></div>
+        </div>
+        <el-alert v-if="setupError" :title="setupError" type="error" :closable="false" show-icon class="login-error"></el-alert>
+      </div>
+    </section>
+
+    <section v-else-if="!authenticated" class="login-shell">
+      <div class="login-brief">
+        <div class="login-brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg></span><span>FriendGate</span></div>
+        <div class="login-hero">
+          <p class="eyebrow">PRIVATE AI GATEWAY</p>
+          <h1>稳定地管理每一个 ChatGPT 授权。</h1>
+          <p>面向小团队的 Codex 私有网关。账号、邀请、密钥与访问记录集中在一个清晰可控的后台。</p>
+          <div class="login-points">
+            <div><strong>真实额度同步</strong><span>Codex 额度与重置次数</span></div>
+            <div><strong>密钥会话隔离</strong><span>IPv4 / IPv6 双栈白名单</span></div>
+          </div>
+        </div>
+        <div class="login-foot">FriendGate Lite · 安全管理控制台</div>
+      </div>
+      <div class="login-panel">
+        <el-card class="login-card">
+          <h2>登录管理后台</h2>
+          <p class="subline">使用管理员账号继续</p>
+          <form @submit.prevent="login">
+            <el-form label-position="top">
+              <el-form-item label="管理员账号"><el-input v-model="loginForm.username" autocomplete="username" placeholder="管理员账号" @keyup.enter="login"></el-input></el-form-item>
+              <el-form-item label="管理员密码"><el-input v-model="loginForm.password" type="password" show-password autocomplete="current-password" placeholder="输入密码" @keyup.enter="login"></el-input></el-form-item>
+              <el-form-item label="Microsoft 动态验证码"><el-input v-model="loginForm.totp_code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" @keyup.enter="login"></el-input></el-form-item>
+              <el-button native-type="button" type="primary" :loading="loginLoading" class="full-button" @click="login">进入后台</el-button>
+              <el-alert v-if="loginError" :title="loginError" type="error" :closable="false" show-icon class="login-error"></el-alert>
+            </el-form>
+          </form>
+          <p class="login-note">登录会话与来源 IP 绑定；上游凭据仅以 AES-256-GCM 密文保存。</p>
+        </el-card>
+      </div>
+    </section>
+
+    <div v-else class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg></span><span class="brand-copy">FriendGate<small>PRIVATE GATEWAY</small></span></div>
+        <el-menu :default-active="tab" @select="selectTab">
+          <el-menu-item index="dashboard"><span class="menu-prefix">01</span><span>仪表盘</span></el-menu-item>
+          <el-menu-item index="accounts"><span class="menu-prefix">02</span><span>ChatGPT 账号</span></el-menu-item>
+          <el-menu-item index="invitations"><span class="menu-prefix">03</span><span>邀请管理</span></el-menu-item>
+          <el-menu-item index="keys"><span class="menu-prefix">04</span><span>API 密钥</span></el-menu-item>
+          <el-menu-item index="system"><span class="menu-prefix">05</span><span>系统与记录</span></el-menu-item>
+        </el-menu>
+        <div class="mobile-nav"><el-segmented v-model="tab" :options="mobileTabs" @change="selectTab"></el-segmented></div>
+        <div class="sidebar-bottom"><p>管理员：{{ username }}</p><el-button text :loading="logoutLoading" :disabled="logoutLoading" @click="logout">退出登录</el-button></div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="page-heading"><div><h1>{{ pageMeta.title }}</h1><p>{{ pageMeta.subtitle }}</p></div></div>
+          <div class="top-actions"><div :class="['top-status', refreshErrors.length ? 'has-error' : '']"><span class="status-dot"></span><span v-if="lastRefreshAt">{{ refreshErrors.length ? `部分数据异常 · ${when(lastRefreshAt)}` : `已同步 · ${when(lastRefreshAt)}` }}</span><span v-else>等待首次同步</span></div><el-button @click="loadAll" :loading="loading">刷新数据</el-button></div>
+        </header>
+
+        <div class="content-area">
+          <el-alert v-if="refreshErrors.length" :title="`${refreshErrors.length} 项数据读取失败，其他区域已独立更新`" :description="refreshErrors.join('；')" type="warning" :closable="false" show-icon class="data-refresh-alert"></el-alert>
+          <section v-show="tab==='dashboard'" class="tab-panel dashboard-page">
+            <div v-if="!dataState.dashboard.loaded" :class="['data-state-panel', dataState.dashboard.error ? 'is-error' : '']">
+              <strong>{{ dataState.dashboard.error ? '仪表盘数据读取失败' : '正在读取真实仪表盘数据' }}</strong>
+              <span>{{ dataState.dashboard.error || '等待服务器返回资源与调用统计，读取成功前不会用 0 冒充真实数据。' }}</span>
+              <el-button v-if="dataState.dashboard.error" size="small" :loading="loading" @click="loadAll">重新读取</el-button>
+            </div>
+            <template v-else>
+              <div class="resource-grid">
+                <el-card v-for="resource in resourceCards" :key="resource.label" class="resource-card" shadow="never">
+                  <div class="resource-heading"><span>{{ resource.label }}</span><strong>{{ resource.available ? `${resource.percent.toFixed(1)}%` : '不可用' }}</strong></div>
+                  <el-progress v-if="resource.available" :percentage="resource.percent" :stroke-width="8" :show-text="false" :color="resource.color"></el-progress><div v-else class="resource-unavailable" aria-label="指标不可用"></div>
+                  <div class="resource-foot"><span>{{ resource.detail }}</span><span>{{ resource.note }}</span></div>
+                </el-card>
+              </div>
+              <div class="dashboard-metrics">
+                <el-card v-for="metric in dashboardMetrics" :key="metric.label" class="metric-card" shadow="never">
+                  <div class="metric-label">{{ metric.label }}</div><div class="metric-value">{{ metric.value }}</div><div class="metric-note">{{ metric.note }}</div>
+                </el-card>
+              </div>
+              <div class="dashboard-columns">
+                <el-card class="surface-card ranking-card" shadow="never">
+                  <template #header><div class="card-title"><h2>今日调用模型排名</h2><span>按调用次数</span></div></template>
+                  <div v-if="modelRanking.length" class="ranking-list">
+                    <div v-for="(item,index) in modelRanking" :key="item.model" class="ranking-row">
+                      <span class="rank-index">{{ index + 1 }}</span>
+                      <div class="rank-main"><div><strong>{{ item.model }}</strong><span>{{ formatNumber(item.total_tokens) }} Token</span></div><el-progress :percentage="modelRankPercent(item.calls)" :stroke-width="6" :show-text="false"></el-progress></div>
+                      <strong class="rank-count">{{ formatNumber(item.calls) }} 次</strong>
+                    </div>
+                  </div>
+                  <div v-else class="result-empty">今日尚无模型调用数据</div>
+                </el-card>
+                <el-card class="surface-card" shadow="never">
+                  <template #header><div class="card-title"><h2>最近调用</h2><span>最新 8 条</span></div></template>
+                  <div v-if="!dataState.usage.loaded" :class="['result-empty', dataState.usage.error ? 'state-error-text' : '']">{{ dataState.usage.error ? `调用记录读取失败：${dataState.usage.error}` : '正在读取真实调用记录' }}</div>
+                  <div v-else-if="usage.length" class="recent-list">
+                    <div v-for="item in usage.slice(0,8)" :key="item.id" class="recent-row">
+                      <span :class="['request-state', item.status >= 400 ? 'is-error' : '']"></span>
+                      <div><strong>{{ item.model || '未知模型' }}</strong><span>{{ item.role }} · {{ item.path }}</span></div>
+                      <div class="recent-value"><strong>{{ formatNumber(item.total_tokens || 0) }}</strong><span>{{ item.status }}</span></div>
+                    </div>
+                  </div>
+                  <div v-else class="result-empty">暂无调用记录</div>
+                </el-card>
+              </div>
+            </template>
+          </section>
+
+          <section v-show="tab==='accounts'" class="tab-panel">
+            <div class="page-toolbar"><div><h2>ChatGPT OAuth 账号</h2><p>自动同步真实套餐、额度窗口、重置次数和每个账号可用的模型目录。</p></div><div class="toolbar-actions"><el-button :loading="modelRefreshing" :disabled="modelRefreshing || !accounts.length" @click="refreshAccountModels">获取模型列表</el-button><el-button type="primary" @click="openAccountDialog">添加账号</el-button></div></div>
+            <div v-if="dataState.models.loaded" class="model-catalog-strip"><div><span class="model-catalog-count">{{ formatNumber(modelCatalogCount) }}</span><div><strong>个可用模型</strong><span>目录更新 {{ when(accountModels.updated_at) }} · {{ accountModels.accounts.length }} 个账号<span v-if="modelAccountErrorCount"> · {{ modelAccountErrorCount }} 个同步异常</span></span></div></div><div class="toolbar-actions"><el-tag v-if="dataState.models.error" type="warning" effect="plain">最近刷新失败，显示上次快照</el-tag><el-button size="small" @click="openModelDialog">查看按账号详情</el-button></div></div>
+            <el-alert v-else-if="dataState.models.error" title="模型目录读取失败" :description="dataState.models.error" type="warning" :closable="false" show-icon class="account-warning"></el-alert>
+            <el-alert v-if="quotaErrorCount" :title="`${quotaErrorCount} 个账号的最近额度同步失败，进度条显示的是上次成功快照`" type="warning" :closable="false" show-icon class="account-warning"></el-alert>
+            <el-card class="surface-card table-card" shadow="never">
+              <el-table :data="accounts" v-loading="loading" empty-text="尚未添加 ChatGPT 账号">
+                <el-table-column label="账号 / 套餐" min-width="195"><template #default="scope"><div class="account-name"><strong>{{ scope.row.name }}</strong><span>{{ scope.row.plan_type || '套餐等待同步' }}</span><span class="account-id">{{ scope.row.chatgpt_account_id }}</span></div></template></el-table-column>
+                <el-table-column label="状态" min-width="135"><template #default="scope"><div class="account-state"><el-tag :type="scope.row.active ? 'success' : 'info'" effect="plain">{{ scope.row.active ? '启用' : '停用' }}</el-tag><el-tooltip v-if="scope.row.quota_error" :content="scope.row.quota_error" placement="top"><el-tag type="warning" effect="plain">同步异常</el-tag></el-tooltip></div><div v-if="scope.row.cooldown_until > nowSeconds" class="quota-reset">冷却至 {{ when(scope.row.cooldown_until) }}</div><div v-if="scope.row.quota_updated_at" class="quota-reset">快照 {{ when(scope.row.quota_updated_at) }}</div></template></el-table-column>
+                <el-table-column label="5 小时额度" min-width="175"><template #default="scope"><div v-if="hasQuota(scope.row,'quota_5h_used')" class="quota-cell"><div class="quota-top"><span>已使用</span><strong>{{ quotaText(scope.row.quota_5h_used) }}</strong></div><el-progress :percentage="quotaPercent(scope.row.quota_5h_used)" :stroke-width="6" :show-text="false" :color="quotaColor(scope.row.quota_5h_used)"></el-progress><div class="quota-reset">{{ resetText(scope.row.quota_5h_reset_at) }}</div></div><span v-else class="quota-reset">尚无成功同步快照</span></template></el-table-column>
+                <el-table-column label="7 天额度" min-width="175"><template #default="scope"><div v-if="hasQuota(scope.row,'quota_7d_used')" class="quota-cell"><div class="quota-top"><span>已使用</span><strong>{{ quotaText(scope.row.quota_7d_used) }}</strong></div><el-progress :percentage="quotaPercent(scope.row.quota_7d_used)" :stroke-width="6" :show-text="false" :color="quotaColor(scope.row.quota_7d_used)"></el-progress><div class="quota-reset">{{ resetText(scope.row.quota_7d_reset_at) }}</div></div><span v-else class="quota-reset">尚无成功同步快照</span></template></el-table-column>
+                <el-table-column label="重置次数" min-width="145"><template #default="scope"><div v-if="scope.row.quota_updated_at" class="reset-credit"><strong>{{ scope.row.reset_credits || 0 }} 次可用</strong><span v-if="scope.row.reset_credit_times?.length" class="quota-reset">最近到期 {{ scope.row.reset_credit_times[0] }}</span><span v-else class="quota-reset">无可用到期记录</span></div><span v-else class="quota-reset">尚无成功同步快照</span></template></el-table-column>
+                <el-table-column label="操作" min-width="330" fixed="right"><template #default="scope"><div class="table-actions"><el-button size="small" :loading="accountRowLoading[String(scope.row.id)]==='refresh'" :disabled="!!accountRowLoading[String(scope.row.id)] && accountRowLoading[String(scope.row.id)]!=='refresh'" @click="refreshQuota(scope.row)">刷新额度</el-button><el-button size="small" :loading="accountRowLoading[String(scope.row.id)]==='reset'" :disabled="!(scope.row.reset_credits > 0) || (!!accountRowLoading[String(scope.row.id)] && accountRowLoading[String(scope.row.id)]!=='reset')" @click="resetQuota(scope.row)">使用重置</el-button><el-button size="small" :type="scope.row.active ? 'warning' : 'success'" plain :loading="accountRowLoading[String(scope.row.id)]==='toggle'" :disabled="!!accountRowLoading[String(scope.row.id)] && accountRowLoading[String(scope.row.id)]!=='toggle'" @click="toggleAccount(scope.row)">{{ scope.row.active ? '停用' : '启用' }}</el-button><el-button size="small" type="danger" plain :loading="accountRowLoading[String(scope.row.id)]==='delete'" :disabled="!!accountRowLoading[String(scope.row.id)] && accountRowLoading[String(scope.row.id)]!=='delete'" @click="deleteAccount(scope.row)">删除</el-button></div></template></el-table-column>
+              </el-table>
+            </el-card>
+          </section>
+
+          <section v-show="tab==='invitations'" class="tab-panel">
+            <div class="page-toolbar"><div><h2>一次性邀请</h2><p>识别码验证后记录设备 IPv4 / IPv6，生成 Key 后链接仅保留 60 秒。</p></div><el-button type="primary" @click="openInviteDialog">新建邀请</el-button></div>
+            <el-card class="surface-card table-card" shadow="never">
+              <template #header><div class="card-title"><h2>已发邀请</h2><span>最近 {{ invites.length }} 条（最多 200 条）</span></div></template>
+              <el-table :data="invites" empty-text="暂无邀请记录">
+                <el-table-column label="角色 / 关联 Key" min-width="175"><template #default="scope"><strong>{{ scope.row.role }}</strong><div class="quota-reset">邀请 #{{ scope.row.id }}</div><div v-if="scope.row.api_key_id" class="invite-key-link"><span>Key #{{ scope.row.api_key_id }}</span><el-tag size="small" :type="scope.row.api_key_status==='deleted' ? 'danger' : scope.row.api_key_status==='disabled' ? 'warning' : 'success'" effect="plain">{{ scope.row.api_key_status==='deleted' ? '已删除' : scope.row.api_key_status==='disabled' ? '已停用' : '启用' }}</el-tag></div></template></el-table-column>
+                <el-table-column label="绑定方式" width="150"><template #default="scope"><el-tag size="small" effect="plain">{{ scope.row.binding_mode==='device' ? '设备凭证' : scope.row.binding_mode==='ip_device' ? 'IP + 设备凭证' : 'IPv4 / IPv6' }}</el-tag></template></el-table-column>
+                <el-table-column label="状态" width="105"><template #default="scope"><el-tag :type="inviteTag(inviteStatus(scope.row))" effect="plain">{{ inviteStatusLabel(scope.row) }}</el-tag></template></el-table-column>
+                <el-table-column label="额度" width="105"><template #default="scope">{{ scope.row.quota_requests || '无限' }}</template></el-table-column>
+                <el-table-column label="失效时间" min-width="165"><template #default="scope">{{ when(scope.row.expires_at) }}</template></el-table-column>
+                <el-table-column label="领取 IPv4 / IPv6" min-width="225"><template #default="scope"><div v-if="scope.row.observed_ips?.length" class="ip-list"><div v-for="ip in scope.row.observed_ips" :key="ip.ip" class="ip-item"><el-tag size="small" effect="plain">{{ ip.family === 'ipv6' ? 'IPv6' : 'IPv4' }}</el-tag><span class="ip-value">{{ ip.ip }}</span></div></div><span v-else class="quota-reset">尚未领取</span></template></el-table-column>
+                <el-table-column label="操作" width="245" fixed="right"><template #default="scope"><div class="table-actions"><el-button v-if="scope.row.invite_url && inviteStatus(scope.row)==='pending'" size="small" :disabled="!!inviteRowLoading[String(scope.row.id)]" @click="copyText(scope.row.invite_url)">复制链接</el-button><el-button v-if="scope.row.api_key_id && scope.row.api_key_status!=='deleted'" size="small" :disabled="!!inviteRowLoading[String(scope.row.id)]" @click="openKeyFromInvite(scope.row)">管理 Key</el-button><el-button v-if="inviteStatus(scope.row)==='pending'" size="small" type="danger" plain :loading="inviteRowLoading[String(scope.row.id)]==='revoke'" :disabled="!!inviteRowLoading[String(scope.row.id)] && inviteRowLoading[String(scope.row.id)]!=='revoke'" @click="revokeInvitation(scope.row)">撤销</el-button><el-button v-else size="small" type="danger" plain :loading="inviteRowLoading[String(scope.row.id)]==='delete'" :disabled="!!inviteRowLoading[String(scope.row.id)] && inviteRowLoading[String(scope.row.id)]!=='delete'" @click="deleteInvitation(scope.row)">删除记录</el-button></div></template></el-table-column>
+              </el-table>
+            </el-card>
+          </section>
+
+          <section v-show="tab==='keys'" class="tab-panel">
+            <div class="page-toolbar"><div><h2>API 密钥</h2><p>密钥由一次性邀请生成；停用、删除或移除 IP 授权成功返回前，在途请求会被取消，后续请求也无法通过本地鉴权。</p></div><el-tag effect="plain">{{ keys.length }} 个 Key</el-tag></div>
+            <el-card class="surface-card table-card" shadow="never">
+              <el-table :data="keys" empty-text="邀请领取后会在这里显示 API Key">
+                <el-table-column label="角色 / Key" min-width="185"><template #default="scope"><strong>{{ scope.row.role }}</strong><div class="account-id">{{ scope.row.masked_key }}</div><el-tag v-if="scope.row.device_bound" size="small" type="warning" effect="plain">设备凭证</el-tag></template></el-table-column>
+                <el-table-column label="授权 IP 与设备" min-width="285"><template #default="scope"><div v-if="!scope.row.allowed_ips?.length" class="quota-reset">未绑定 IP（设备凭证模式）</div><div class="ip-list"><div v-for="ip in scope.row.allowed_ips" :key="ip.id" class="ip-item"><el-tag size="small" effect="plain">{{ ip.family === 'ipv6' ? 'IPv6' : 'IPv4' }}</el-tag><span class="ip-value">{{ ip.ip }}</span><span class="device-note">{{ ip.device_note }}</span><el-button size="small" text type="danger" :loading="keyRowLoading[String(scope.row.id)]==='ip'" :disabled="!!keyRowLoading[String(scope.row.id)] && keyRowLoading[String(scope.row.id)]!=='ip'" @click="deleteKeyIP(scope.row, ip)">删除</el-button></div></div><el-button size="small" class="inline-add" :loading="keyRowLoading[String(scope.row.id)]==='ip'" :disabled="!!keyRowLoading[String(scope.row.id)] && keyRowLoading[String(scope.row.id)]!=='ip'" @click="addKeyIP(scope.row)">添加 IP</el-button></template></el-table-column>
+                <el-table-column label="请求额度" min-width="155"><template #default="scope"><el-input-number v-model="keyQuotaDrafts[String(scope.row.id)]" :min="0" :max="9007199254740991" class="input-compact" size="small" controls-position="right" :disabled="!!keyRowLoading[String(scope.row.id)]" @change="markKeyQuotaDirty(scope.row)"></el-input-number><div :class="['quota-reset', isKeyQuotaDirty(scope.row) ? 'quota-dirty' : '']">{{ isKeyQuotaDirty(scope.row) ? '未保存 · ' : '' }}已用 {{ scope.row.used_requests || 0 }}</div></template></el-table-column>
+                <el-table-column label="状态" width="95"><template #default="scope"><el-tag :type="scope.row.status==='active' ? 'success' : 'info'" effect="plain">{{ scope.row.status==='active' ? '启用' : '停用' }}</el-tag></template></el-table-column>
+                <el-table-column label="最近使用" min-width="155"><template #default="scope">{{ when(scope.row.last_used_at) }}</template></el-table-column>
+                <el-table-column label="操作" min-width="270" fixed="right"><template #default="scope"><div class="table-actions"><el-button size="small" :loading="keyRowLoading[String(scope.row.id)]==='copy'" :disabled="!!keyRowLoading[String(scope.row.id)] && keyRowLoading[String(scope.row.id)]!=='copy'" @click="copyKey(scope.row)">复制 Key</el-button><el-button size="small" :loading="keyRowLoading[String(scope.row.id)]==='save'" :disabled="!isKeyQuotaDirty(scope.row) || (!!keyRowLoading[String(scope.row.id)] && keyRowLoading[String(scope.row.id)]!=='save')" @click="saveKey(scope.row)">保存额度</el-button><el-button size="small" :type="scope.row.status==='active' ? 'warning' : 'success'" plain :loading="keyRowLoading[String(scope.row.id)]==='toggle'" :disabled="!!keyRowLoading[String(scope.row.id)] && keyRowLoading[String(scope.row.id)]!=='toggle'" @click="toggleKey(scope.row)">{{ scope.row.status==='active' ? '停用' : '启用' }}</el-button><el-button size="small" type="danger" plain :loading="keyRowLoading[String(scope.row.id)]==='delete'" :disabled="!!keyRowLoading[String(scope.row.id)] && keyRowLoading[String(scope.row.id)]!=='delete'" @click="deleteKey(scope.row)">删除</el-button></div></template></el-table-column>
+              </el-table>
+            </el-card>
+          </section>
+
+          <section v-show="tab==='system'" class="tab-panel">
+            <div class="page-toolbar backup-toolbar"><div><h2>系统数据备份</h2><p>导出包含账号、密钥、邀请、授权、配置与记录的加密备份；导入前请确认文件来源和密码。</p></div><div class="toolbar-actions"><el-button :loading="backupExporting" :disabled="backupExporting || backupImporting" @click="openBackupExportDialog">导出全部数据</el-button><el-button type="primary" plain :loading="backupImporting" :disabled="backupImporting || backupExporting" @click="openBackupImportDialog">导入备份</el-button></div></div>
+            <template v-if="dataState.security.loaded">
+              <el-alert v-if="security.observability_error" title="系统记录库实时读写检查失败，当前日志可能不完整" :description="security.observability_error" type="error" :closable="false" show-icon class="security-alert"></el-alert>
+              <el-alert v-if="security.runtime_errors?.length" title="安全执行链路发生运行错误，相关健康项已降级" :description="runtimeErrorSummary" type="error" :closable="false" show-icon class="security-alert"></el-alert>
+              <div v-if="security.runtime_errors?.length" class="runtime-error-list">
+                <div v-for="issue in security.runtime_errors" :key="issue.key" class="runtime-error-item"><div><strong>{{ issue.key }}</strong><span>{{ when(issue.updated_at) }}</span></div><p>{{ issue.detail || '未返回错误详情' }}</p></div>
+              </div>
+              <el-alert v-if="security.nginx?.modified" title="检测到 Nginx 配置已被修改：当前文件指纹与管理员确认的基线不一致" type="error" :closable="false" show-icon class="security-alert"></el-alert>
+              <el-alert v-if="security.nginx?.baseline_outdated" title="Nginx 指纹算法已升级，请检查文件后重新确认基线" type="warning" :closable="false" show-icon class="security-alert"></el-alert>
+              <el-alert v-if="security.nginx?.enabled && !security.nginx?.available" title="本机未检测到可读的 Nginx 配置，Nginx 完整性监控未实际运行；其他安全防护不受影响" type="warning" :closable="false" show-icon class="security-alert"></el-alert>
+              <el-alert v-if="security.anomalies?.length" :title="`最近安全异常：${security.anomalies[0].kind} · ${security.anomalies[0].ip}`" :description="`${when(security.anomalies[0].created_at)} · ${security.anomalies[0].path || '—'} · ${security.anomalies[0].detail || '无详情'}`" type="warning" :closable="false" show-icon class="security-alert"></el-alert>
+              <div class="security-overview">
+                <el-card class="health-card" shadow="never"><div class="health-score"><el-progress type="dashboard" :percentage="security.health_percent || 0" :color="healthColors"></el-progress><div><h2>安全健康状态</h2><p>后端返回的防护配置与可验证状态 · {{ security.health_applicable_checks || 0 }} 项适用检查</p><el-tag :type="(security.health_percent || 0) >= 90 ? 'success' : (security.health_percent || 0) >= 70 ? 'warning' : 'danger'" effect="plain">{{ security.health_percent || 0 }}% 健康</el-tag></div></div></el-card>
+                <el-card class="surface-card protection-card" shadow="never"><div><h2>一键安全保护</h2><p>启用 404 / 502 阈值封禁；仅在检测到可读配置时启用 Nginx SHA-256 完整性监控。核心鉴权始终开启。</p></div><el-switch v-model="securityForm.protection_enabled" size="large" inline-prompt active-text="开启" inactive-text="关闭" :disabled="!dataState.security.loaded || !!dataState.security.error || securitySaving" @change="saveProtection"></el-switch></el-card>
+              </div>
+            </template>
+            <el-card class="surface-card system-card" shadow="never">
+              <el-tabs v-model="systemPanel">
+                <el-tab-pane label="安全防护" name="security">
+                  <div v-if="!dataState.security.loaded" :class="['data-state-panel', 'inside-card', dataState.security.error ? 'is-error' : '']">
+                    <strong>{{ dataState.security.error ? '安全状态读取失败，所有配置操作已锁定' : '正在读取真实安全状态' }}</strong>
+                    <span>{{ dataState.security.error || '必须先成功读取服务端现有配置，才能修改防护参数。' }}</span>
+                    <el-button v-if="dataState.security.error" size="small" :loading="loading" @click="loadAll">重新读取</el-button>
+                  </div>
+                  <div v-else class="security-pane">
+                    <div class="protection-list"><div v-for="check in security.checks || []" :key="check.key" :class="['protection-item', check.mode==='not_applicable' ? 'is-na' : check.healthy ? 'is-healthy' : 'is-warning']"><span class="protection-state">{{ check.mode==='not_applicable' ? '—' : check.healthy ? '✓' : '!' }}</span><div><strong>{{ check.name }}</strong><p>{{ check.detail }}</p></div><el-tag size="small" :type="check.mode==='not_applicable' ? 'info' : check.healthy ? 'success' : 'warning'" effect="plain">{{ check.mode==='not_applicable' ? '不适用' : check.healthy ? '正常' : (check.enabled ? '异常' : '未开启') }}</el-tag></div></div>
+                    <el-divider content-position="left">自动封禁参数</el-divider>
+                    <el-form label-position="top" class="security-config-form"><el-form-item label="404 阈值"><el-input-number v-model="securityForm.threshold_404" :min="3" :max="10000" :disabled="!dataState.security.loaded || !!dataState.security.error || securitySaving"></el-input-number></el-form-item><el-form-item label="502 阈值"><el-input-number v-model="securityForm.threshold_502" :min="3" :max="10000" :disabled="!dataState.security.loaded || !!dataState.security.error || securitySaving"></el-input-number></el-form-item><el-form-item label="统计窗口（分钟）"><el-input-number v-model="securityForm.window_minutes" :min="1" :max="1440" :disabled="!dataState.security.loaded || !!dataState.security.error || securitySaving"></el-input-number></el-form-item><el-form-item label="自动封禁（小时）"><el-input-number v-model="securityForm.ban_hours" :min="1" :max="8760" :disabled="!dataState.security.loaded || !!dataState.security.error || securitySaving"></el-input-number></el-form-item><el-form-item label="Nginx 完整性"><el-switch v-model="securityForm.nginx_protection" :disabled="!dataState.security.loaded || !!dataState.security.error || securitySaving"></el-switch><div v-if="!security.nginx?.available" class="quota-reset">当前不可读；仍可显式关闭已保存的监控配置</div></el-form-item><el-button type="primary" :loading="securitySaving" :disabled="!dataState.security.loaded || !!dataState.security.error || securitySaving" @click="saveProtection">保存安全策略</el-button></el-form>
+                    <el-divider content-position="left">Nginx 配置基线</el-divider>
+                    <div class="nginx-status"><div><strong>{{ nginxStateText(security.nginx) }}</strong><p>{{ (security.nginx?.paths || []).join(' · ') }}</p><p class="quota-reset">检查时间 {{ when(security.nginx?.checked_at) }} · 读取 {{ formatBytes(security.nginx?.total_bytes || 0) }}<span v-if="security.nginx?.truncated"> · 已触发安全截断</span></p><details v-if="security.nginx?.errors?.length" class="nginx-errors"><summary>查看真实检测错误（{{ security.nginx.errors.length }} 条）</summary><p class="danger-text">{{ security.nginx.errors.join('；') }}</p></details></div><el-button :loading="securitySaving" :disabled="!dataState.security.loaded || !!dataState.security.error || !security.nginx?.available || securitySaving" @click="confirmNginxBaseline">确认当前配置为新基线</el-button></div>
+                  </div>
+                </el-tab-pane>
+                <el-tab-pane label="IP 封禁" name="bans">
+                  <div class="table-pane-toolbar"><div><strong>IP 黑名单</strong><span>自动封禁按作用域拦截 API、邀请或配置指南；管理员手工封禁拦全部端口。关联设备的 IPv4 / IPv6 会一起处理。</span></div><el-button type="danger" plain @click="banDialogVisible=true">封禁 IP</el-button></div>
+                  <div v-if="!dataState.bans.loaded" :class="['data-state-panel', 'inside-card', dataState.bans.error ? 'is-error' : '']"><strong>{{ dataState.bans.error ? 'IP 黑名单读取失败' : '正在读取 IP 黑名单' }}</strong><span>{{ dataState.bans.error || '读取成功后才会显示真实空状态。' }}</span></div>
+                  <el-table v-else :data="bans" empty-text="当前没有封禁 IP"><el-table-column label="IP" min-width="210"><template #default="scope"><el-tag size="small" effect="plain">{{ scope.row.ip.includes(':') ? 'IPv6' : 'IPv4' }}</el-tag><span class="ip-value ip-spaced">{{ scope.row.ip }}</span></template></el-table-column><el-table-column prop="reason" label="原因" min-width="210"></el-table-column><el-table-column label="作用域" width="120"><template #default="scope"><el-tag :type="scope.row.scope==='all' ? 'danger' : 'warning'" effect="plain">{{ scope.row.scope==='all' ? '全部端口' : scope.row.scope==='guide' ? '配置指南' : 'API / 邀请' }}</el-tag></template></el-table-column><el-table-column prop="attempts" label="次数" width="90"></el-table-column><el-table-column label="封禁时间" min-width="160"><template #default="scope">{{ when(scope.row.created_at) }}</template></el-table-column><el-table-column label="有效期" min-width="160"><template #default="scope"><el-tag v-if="!scope.row.expires_at" type="danger" effect="plain">永久</el-tag><span v-else>{{ when(scope.row.expires_at) }}</span></template></el-table-column><el-table-column label="操作" width="125" fixed="right"><template #default="scope"><el-button size="small" :loading="!!banRowLoading[scope.row.ip]" @click="unban(scope.row)">解除封禁</el-button></template></el-table-column></el-table>
+                </el-tab-pane>
+                <el-tab-pane label="后台安全" name="account"><div class="password-pane"><div><h2>修改后台密码</h2><p>必须同时验证当前密码与 Microsoft Authenticator 动态验证码。成功后所有后台会话会立即注销。</p></div><el-form label-position="top"><el-form-item label="当前密码"><el-input v-model="passwordForm.current_password" type="password" show-password autocomplete="current-password"></el-input></el-form-item><el-form-item label="新密码"><el-input v-model="passwordForm.new_password" type="password" show-password maxlength="256" autocomplete="new-password" placeholder="12–256 字节"></el-input></el-form-item><el-form-item label="确认新密码"><el-input v-model="passwordForm.confirm" type="password" show-password maxlength="256" autocomplete="new-password"></el-input></el-form-item><el-form-item label="Microsoft 动态验证码"><el-input v-model="passwordForm.totp_code" maxlength="6" inputmode="numeric" autocomplete="one-time-code"></el-input></el-form-item><el-button type="primary" :loading="passwordSaving" @click="changePassword">修改密码并注销全部会话</el-button></el-form></div></el-tab-pane>
+                <el-tab-pane label="使用记录" name="usage">
+                  <div class="table-pane-toolbar"><div><strong>最近使用记录</strong><span v-if="dataState.usage.loaded">当前读取最新 {{ usage.length }} 条（接口上限 500 条；底层保留近 30 天且最多 20 万条），此处每页 {{ recordPageSize }} 条。</span><span v-else>等待服务端返回真实使用记录。</span></div></div>
+                  <div v-if="!dataState.usage.loaded" :class="['data-state-panel', 'inside-card', dataState.usage.error ? 'is-error' : '']"><strong>{{ dataState.usage.error ? '使用记录读取失败' : '正在读取使用记录' }}</strong><span>{{ dataState.usage.error || '读取成功后才会显示真实空状态。' }}</span></div>
+                  <template v-else><el-table :data="pagedUsage" empty-text="暂无使用记录"><el-table-column label="时间" min-width="165"><template #default="scope">{{ when(scope.row.created_at) }}</template></el-table-column><el-table-column prop="role" label="角色" min-width="105"></el-table-column><el-table-column prop="account_name" label="上游账号" min-width="140"></el-table-column><el-table-column label="来源 IP" min-width="155"><template #default="scope"><span class="ip-value">{{ scope.row.ip }}</span></template></el-table-column><el-table-column label="接口 / 模型" min-width="230"><template #default="scope"><div>{{ scope.row.method }} {{ scope.row.path }}</div><div class="quota-reset">{{ scope.row.model || '—' }}</div></template></el-table-column><el-table-column prop="status" label="状态" width="82"></el-table-column><el-table-column label="耗时" width="96"><template #default="scope">{{ scope.row.duration_ms }} ms</template></el-table-column><el-table-column label="Token" min-width="155"><template #default="scope"><strong>{{ formatNumber(scope.row.total_tokens || 0) }}</strong><div class="quota-reset">输入 {{ formatNumber(scope.row.input_tokens || 0) }} · 输出 {{ formatNumber(scope.row.output_tokens || 0) }}</div></template></el-table-column><el-table-column label="请求与错误" min-width="280"><template #default="scope"><div class="request-id" :title="scope.row.request_id || ''">{{ scope.row.request_id || '无 request_id' }}</div><div v-if="scope.row.error" class="usage-error" :title="scope.row.error">{{ scope.row.error }}</div><span v-else class="quota-reset">无错误</span></template></el-table-column></el-table><div v-if="usage.length > recordPageSize" class="record-pagination"><el-pagination v-model:current-page="usagePage" background layout="prev, pager, next" :page-size="recordPageSize" :total="usage.length"></el-pagination></div></template>
+                </el-tab-pane>
+                <el-tab-pane label="安全与操作日志" name="logs">
+                  <div class="table-pane-toolbar"><div><strong>最近安全与操作日志</strong><span v-if="dataState.logs.loaded">安全、操作日志各读取最新 300 条，按时间合并后取最新 {{ combinedLogs.length }} 条，此处每页 {{ recordPageSize }} 条。</span><span v-else>等待服务端返回真实日志。</span></div></div>
+                  <div v-if="!dataState.logs.loaded" :class="['data-state-panel', 'inside-card', dataState.logs.error ? 'is-error' : '']"><strong>{{ dataState.logs.error ? '安全与操作日志读取失败' : '正在读取安全与操作日志' }}</strong><span>{{ dataState.logs.error || '读取成功后才会显示真实空状态。' }}</span></div>
+                  <template v-else><el-table :data="pagedLogs" empty-text="暂无日志"><el-table-column label="时间" min-width="165"><template #default="scope">{{ when(scope.row.time) }}</template></el-table-column><el-table-column prop="type" label="类型" min-width="170"></el-table-column><el-table-column prop="actor" label="执行者" min-width="100"></el-table-column><el-table-column label="来源 IP" min-width="155"><template #default="scope"><span class="ip-value">{{ scope.row.source_ip }}</span></template></el-table-column><el-table-column prop="target" label="目标" min-width="160"><template #default="scope"><span class="ip-value">{{ scope.row.target }}</span></template></el-table-column><el-table-column label="详情" min-width="300"><template #default="scope"><span class="log-detail" :title="scope.row.detail">{{ scope.row.detail }}</span></template></el-table-column></el-table><div v-if="combinedLogs.length > recordPageSize" class="record-pagination"><el-pagination v-model:current-page="logPage" background layout="prev, pager, next" :page-size="recordPageSize" :total="combinedLogs.length"></el-pagination></div></template>
+                </el-tab-pane>
+              </el-tabs>
+            </el-card>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <el-dialog v-if="authenticated" v-model="accountDialogVisible" title="添加 ChatGPT 账号" width="min(640px,94vw)" :close-on-click-modal="false" @closed="resetAccountDialog">
+      <el-tabs v-model="accountMethod">
+        <el-tab-pane label="OpenAI OAuth" name="oauth">
+          <el-form label-position="top">
+            <el-form-item label="账号备注"><el-input v-model="oauthForm.name" maxlength="100" show-word-limit placeholder="例如：主账号 A"></el-input></el-form-item>
+            <p class="form-tip">生成授权链接后完成 ChatGPT 登录，再把浏览器地址栏中完整的 localhost 回跳链接粘贴回来。</p>
+            <el-button type="primary" :loading="oauth.loading" @click="startOpenAIOAuth">1. 生成授权链接</el-button>
+          </el-form>
+          <div v-if="oauth.sessionId" class="oauth-flow">
+            <div class="flow-heading"><span class="flow-index">2</span><span>打开链接完成 OpenAI 登录</span></div>
+            <div class="oauth-url">{{ oauth.url }}</div>
+            <div class="flow-actions"><a :href="oauth.url" target="_blank" rel="noopener noreferrer"><el-button size="small" type="primary" plain>打开授权链接</el-button></a><el-button size="small" @click="copyText(oauth.url)">复制链接</el-button></div>
+          </div>
+          <el-form label-position="top" class="callback-form oauth-callback-standalone"><el-form-item label="3. 粘贴完整 localhost 回跳链接"><el-input v-model="oauth.callbackURL" type="textarea" :rows="3" placeholder="http://localhost:1455/auth/callback?code=...&state=..."></el-input></el-form-item><el-button type="primary" :loading="oauth.completing" @click="completeOpenAIOAuth">完成授权并添加</el-button></el-form>
+        </el-tab-pane>
+        <el-tab-pane label="导入 auth.json" name="manual">
+          <el-form label-position="top"><el-form-item label="账号备注"><el-input v-model="manualAccount.name" maxlength="100" placeholder="例如：主账号 A"></el-input></el-form-item><el-form-item label="Codex auth.json"><el-input v-model="manualAccount.auth" type="textarea" :rows="7" placeholder="粘贴完整 auth.json；支持 tokens.access_token / refresh_token / account_id"></el-input></el-form-item><el-button type="primary" :loading="manualAccountLoading" @click="createManualAccount">保存账号</el-button></el-form>
+        </el-tab-pane>
+      </el-tabs>
+    </el-dialog>
+
+    <el-dialog v-if="authenticated" v-model="modelDialogVisible" title="ChatGPT 可用模型目录" width="min(920px,96vw)" class="model-dialog" :close-on-click-modal="false">
+      <div class="model-dialog-summary"><div><span>{{ formatNumber(modelCatalogCount) }}</span><div><strong>个模型并集</strong><small>最后更新 {{ when(accountModels.updated_at) }}</small></div></div><el-button :loading="modelRefreshing" :disabled="modelRefreshing || !accounts.length" @click="refreshAccountModels">重新获取</el-button></div>
+      <el-alert v-if="dataState.models.error" title="最近一次模型目录刷新失败，当前展示上次成功快照" :description="dataState.models.error" type="warning" :closable="false" show-icon class="account-warning"></el-alert>
+      <el-table :data="accountModels.accounts" max-height="390" empty-text="当前没有账号模型快照">
+        <el-table-column label="ChatGPT 账号" min-width="170"><template #default="scope"><div class="model-account-name"><strong>{{ scope.row.account_name }}</strong><span>{{ scope.row.account_id || '—' }}</span></div></template></el-table-column>
+        <el-table-column label="同步状态" min-width="170"><template #default="scope"><el-tag :type="scope.row.error ? 'danger' : 'success'" effect="plain">{{ scope.row.error ? '同步失败' : '同步成功' }}</el-tag><div v-if="scope.row.error" class="model-sync-error" :title="scope.row.error">{{ scope.row.error }}</div><div v-else class="quota-reset">{{ when(scope.row.updated_at) }}</div></template></el-table-column>
+        <el-table-column label="账号可用模型" min-width="360"><template #default="scope"><div v-if="scope.row.models?.length" class="model-tag-list"><el-tag v-for="model in scope.row.models" :key="model" size="small" effect="plain">{{ model }}</el-tag></div><span v-else class="quota-reset">未返回模型</span></template></el-table-column>
+      </el-table>
+      <el-divider content-position="left">模型并集</el-divider>
+      <div v-if="modelCatalogModels.length" class="model-union-list"><div v-for="model in modelCatalogModels" :key="model.id" class="model-union-item"><strong>{{ model.id }}</strong><span v-if="model.owned_by">{{ model.owned_by }}</span><span v-else-if="model.object">{{ model.object }}</span></div></div><div v-else class="result-empty compact">暂无可用模型</div>
+    </el-dialog>
+
+    <el-dialog v-if="authenticated" v-model="inviteDialogVisible" title="新建一次性邀请" width="min(620px,94vw)" :close-on-click-modal="false" @closed="resetInviteDialog">
+      <el-form v-if="!inviteResult" label-position="top">
+        <el-form-item label="角色备注"><el-input v-model="inviteForm.role" maxlength="100" placeholder="例如：王XX同学"></el-input></el-form-item>
+        <el-form-item label="识别码（留空自动生成）"><el-input v-model="inviteForm.recognition_code" minlength="6" maxlength="32" placeholder="至少 6 位"></el-input></el-form-item>
+        <div class="two-column-form"><el-form-item label="请求额度（0=无限）"><el-input-number v-model="inviteForm.quota_requests" :min="0" controls-position="right"></el-input-number></el-form-item><el-form-item label="邀请有效小时"><el-input-number v-model="inviteForm.expires_hours" :min="1" :max="720" controls-position="right"></el-input-number></el-form-item></div>
+        <el-form-item label="设备绑定方式"><el-select v-model="inviteForm.binding_mode" style="width:100%"><el-option label="IPv4 / IPv6（动态 IP 需重新授权）" value="ip"></el-option><el-option label="设备凭证 / MAC Agent（适合动态 IP）" value="device"></el-option><el-option label="IPv4 / IPv6 + 设备凭证 / MAC Agent" value="ip_device"></el-option></el-select></el-form-item>
+        <p class="form-tip">公网浏览器无法读取真实网卡 MAC；“设备凭证”是一次性随机凭证，可由受信设备 Agent 读取 MAC 后安全映射，网关只保存哈希，不接受手填 MAC。Key 展示 60 秒后链接永久失效。</p>
+        <el-button type="primary" :loading="inviteLoading" @click="createInvitation">生成邀请</el-button>
+      </el-form>
+      <div v-else class="dialog-result"><el-result icon="success" title="邀请已创建" :sub-title="inviteResult.role"></el-result><div class="result-block"><div><div class="result-label">邀请链接</div><div class="result-value">{{ inviteResult.invite_url }}</div><el-button size="small" @click="copyText(inviteResult.invite_url)">复制链接</el-button></div><div><div class="result-label">识别码（请与链接分开发送）</div><div class="code-value">{{ inviteResult.recognition_code }}</div><el-button size="small" @click="copyText(inviteResult.recognition_code)">复制识别码</el-button></div></div></div>
+    </el-dialog>
+
+    <el-dialog v-if="authenticated" v-model="banDialogVisible" title="封禁 IP" width="min(520px,94vw)" :close-on-click-modal="false">
+      <el-form label-position="top"><el-form-item label="IPv4 或 IPv6"><el-input v-model="banForm.ip" placeholder="例如：203.0.113.10"></el-input></el-form-item><el-form-item label="封禁原因"><el-input v-model="banForm.reason" maxlength="200" placeholder="管理员手动封禁"></el-input></el-form-item><el-form-item label="封禁类型"><el-radio-group v-model="banForm.permanent"><el-radio-button :value="false">临时封禁</el-radio-button><el-radio-button :value="true">永久封禁</el-radio-button></el-radio-group></el-form-item><el-form-item v-if="!banForm.permanent" label="封禁小时"><el-input-number v-model="banForm.hours" :min="1" :max="8760"></el-input-number></el-form-item><el-alert title="若此 IP 与某个 Key 的双栈设备关联，配对的 IPv4 / IPv6 会一并进入黑名单。" type="warning" :closable="false" show-icon></el-alert></el-form>
+      <template #footer><el-button @click="banDialogVisible=false">取消</el-button><el-button type="danger" :loading="banSaving" @click="banIP">确认封禁</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-if="authenticated" v-model="backupExportDialogVisible" title="导出全部系统数据" width="min(540px,94vw)" class="backup-dialog" :close-on-click-modal="false" :close-on-press-escape="!backupExporting" :show-close="!backupExporting" @closed="resetBackupExportDialog">
+      <el-alert title="备份文件使用此密码加密，系统不会替你保存密码。密码遗失后无法恢复备份。" type="warning" :closable="false" show-icon class="backup-warning"></el-alert>
+      <el-form label-position="top">
+        <el-form-item label="备份加密密码"><el-input v-model="backupExportForm.passphrase" type="password" show-password minlength="12" autocomplete="new-password" placeholder="12–4096 字节"></el-input></el-form-item>
+        <el-form-item label="确认备份密码"><el-input v-model="backupExportForm.confirm" type="password" show-password minlength="12" autocomplete="new-password" @keyup.enter="exportBackup"></el-input></el-form-item>
+      </el-form>
+      <template #footer><el-button :disabled="backupExporting" @click="backupExportDialogVisible=false">取消</el-button><el-button type="primary" :loading="backupExporting" :disabled="backupExporting" @click="exportBackup">生成并下载加密备份</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-if="authenticated" v-model="backupImportDialogVisible" title="导入加密备份" width="min(600px,94vw)" class="backup-dialog" :close-on-click-modal="false" :close-on-press-escape="!backupImporting" :show-close="!backupImporting" @closed="resetBackupImportDialog">
+      <el-alert title="导入可能覆盖当前同标识数据。请先导出现有数据，并只选择可信来源的 FriendGate 备份；成功后将安全注销当前后台会话。" type="warning" :closable="false" show-icon class="backup-warning"></el-alert>
+      <el-upload v-model:file-list="backupImportFiles" class="backup-upload" drag action="#" :auto-upload="false" :limit="1" accept=".fgbackup,.backup,.bin,application/octet-stream" :disabled="backupImporting" :on-change="backupFileChanged" :on-remove="backupFileRemoved" :on-exceed="backupFileExceeded">
+        <div class="backup-upload-copy"><strong>点击或拖拽备份文件到这里</strong><span>文件只会提交到当前 FriendGate 服务器进行完整性与密码校验</span></div>
+      </el-upload>
+      <el-form label-position="top" class="backup-passphrase-form"><el-form-item label="备份解密密码"><el-input v-model="backupImportForm.passphrase" type="password" show-password autocomplete="current-password" :disabled="backupImporting" @keyup.enter="importBackup"></el-input></el-form-item></el-form>
+      <template #footer><el-button :disabled="backupImporting" @click="backupImportDialogVisible=false">取消</el-button><el-button type="primary" :loading="backupImporting" :disabled="backupImporting || !backupImportFile || !backupImportForm.passphrase" @click="importBackup">校验并导入</el-button></template>
+    </el-dialog>
+  </div>
+  <script src="/vendor/vue.global.prod.js" defer></script>
+  <script src="/vendor/element-plus.full.min.js" defer></script>
+  <script src="/admin.js?v=20260801-device-binding-v1" defer></script>
+</body>
+</html>

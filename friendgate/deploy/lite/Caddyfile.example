@@ -1,0 +1,27 @@
+# Optional HTTPS front end. The four products remain different listeners and
+# different origins even when Caddy terminates TLS for them.
+api.example.com {
+  reverse_proxy 127.0.0.1:8080
+}
+
+admin.example.com {
+  reverse_proxy 127.0.0.1:8081
+}
+
+invite.example.com {
+  reverse_proxy 127.0.0.1:8082
+}
+
+guide.example.com {
+  reverse_proxy 127.0.0.1:8083
+}
+
+# 浏览器只有分别访问 IPv4-only / IPv6-only 域名，才能可靠取得双栈地址。
+# invite4.example.com 只设置 A 记录；invite6.example.com 只设置 AAAA 记录。
+invite4.example.com {
+  reverse_proxy 127.0.0.1:8082
+}
+
+invite6.example.com {
+  reverse_proxy 127.0.0.1:8082
+}

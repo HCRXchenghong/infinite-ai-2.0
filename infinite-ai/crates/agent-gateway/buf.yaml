@@ -1,0 +1,23 @@
+# buf 模块配置（v2 schema）。模块根设在 crates/agent-gateway/，供 v2 帧壳导入共享业务消息。
+version: v2
+modules:
+  - path: .
+    excludes:
+      # 排除 WebUI node_modules 里的第三方 .proto。
+      - web
+lint:
+  use:
+    - STANDARD
+  except:
+    # 历史布局 proto/<版本>/ 早于 buf；迁目录会改 import 路径、破坏 Rust build.rs 与生成物，不翻新。
+    - PACKAGE_DIRECTORY_MATCH
+  # 共享业务消息沿用已发布的枚举命名；只对该迁移文件保留最小豁免。
+  ignore_only:
+    ENUM_VALUE_PREFIX:
+      - proto/v2/gateway.proto
+    ENUM_ZERO_VALUE_SUFFIX:
+      - proto/v2/gateway.proto
+breaking:
+  use:
+    # WIRE_JSON：兼守二进制与 JSON 线格式兼容（chat 事件与公开分享页仍走 JSON 载荷）。
+    - WIRE_JSON

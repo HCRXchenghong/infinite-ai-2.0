@@ -1,0 +1,74 @@
+name: friendgate
+
+services:
+  friendgate:
+    image: ${FRIENDGATE_IMAGE:-friendgate:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile.lite
+      args:
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.google.cn}
+    container_name: friendgate
+    restart: unless-stopped
+    init: true
+    # The application may spend up to 15 seconds draining live streams.
+    stop_grace_period: ${STOP_GRACE_PERIOD:-30s}
+    read_only: true
+    tmpfs:
+      # Requests above 128 KiB are replayed from an unlinked 0600 temp file.
+      # Keep this larger than LITE_MAX_BODY_MIB plus normal runtime headroom.
+      - /tmp:size=${TMPFS_SIZE:-128m},mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${MEMORY_LIMIT:-512m}
+    cpus: ${CPU_LIMIT:-1.0}
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: "${LOG_MAX_FILES:-3}"
+    # Omitting a host IP lets Docker publish on every IPv4/IPv6 address the
+    # daemon supports. This is required for the invitation dual-stack probes.
+    # Restrict exposure with the host firewall or an explicit Compose override.
+    ports:
+      - "${API_PORT:-8080}:8080"
+      - "${ADMIN_PORT:-8081}:8081"
+      - "${INVITE_PORT:-8082}:8082"
+      - "${GUIDE_PORT:-8083}:8083"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      LITE_DATA_DIR: /data
+      LITE_ADMIN_USERNAME: ${LITE_ADMIN_USERNAME:-admin}
+      LITE_ADMIN_PASSWORD: ${LITE_ADMIN_PASSWORD:?LITE_ADMIN_PASSWORD is required}
+      LITE_MASTER_KEY: ${LITE_MASTER_KEY:?LITE_MASTER_KEY is required}
+      LITE_PUBLIC_API_URL: ${LITE_PUBLIC_API_URL:?LITE_PUBLIC_API_URL is required}
+      LITE_PUBLIC_INVITE_URL: ${LITE_PUBLIC_INVITE_URL:?LITE_PUBLIC_INVITE_URL is required}
+      LITE_PUBLIC_GUIDE_URL: ${LITE_PUBLIC_GUIDE_URL:?LITE_PUBLIC_GUIDE_URL is required}
+      LITE_PUBLIC_IPV4_PROBE_URL: ${LITE_PUBLIC_IPV4_PROBE_URL:-}
+      LITE_PUBLIC_IPV6_PROBE_URL: ${LITE_PUBLIC_IPV6_PROBE_URL:-}
+      LITE_UPSTREAM_BASE_URL: ${LITE_UPSTREAM_BASE_URL:-https://chatgpt.com/backend-api/codex}
+      LITE_SECURE_COOKIES: ${LITE_SECURE_COOKIES:-false}
+      LITE_TRUSTED_PROXIES: ${LITE_TRUSTED_PROXIES:-}
+      LITE_BAN_THRESHOLD: ${LITE_BAN_THRESHOLD:-20}
+      LITE_BAN_WINDOW: ${LITE_BAN_WINDOW:-1m}
+      LITE_BAN_DURATION: ${LITE_BAN_DURATION:-24h}
+      LITE_INVITE_TTL: ${LITE_INVITE_TTL:-168h}
+      LITE_ADMIN_SESSION_TTL: ${LITE_ADMIN_SESSION_TTL:-12h}
+      LITE_STICKY_SESSION_TTL: ${LITE_STICKY_SESSION_TTL:-1h}
+      LITE_ACCOUNT_COOLDOWN: ${LITE_ACCOUNT_COOLDOWN:-5m}
+      LITE_QUOTA_BASE_URL: ${LITE_QUOTA_BASE_URL:-https://chatgpt.com/backend-api/wham}
+      LITE_QUOTA_SYNC_INTERVAL: ${LITE_QUOTA_SYNC_INTERVAL:-5m}
+      LITE_MAX_BODY_MIB: ${LITE_MAX_BODY_MIB:-64}
+      # Docker cannot see the host /etc/nginx unless the optional read-only
+      # compose override is active. Missing /host-nginx is reported as N/A.
+      LITE_NGINX_MONITOR_PATHS: ${LITE_NGINX_MONITOR_PATHS:-/host-nginx/nginx.conf,/host-nginx/conf.d,/host-nginx/sites-enabled}
+    volumes:
+      - friendgate_data:/data
+      # Host Nginx is added by docker-compose.nginx.yml only when its source
+      # exists; the installer detects this automatically.
+
+volumes:
+  friendgate_data:
