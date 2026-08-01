@@ -653,7 +653,8 @@ pub fn run() {
         std::env::set_var("QT_IM_MODULE", "ibus");
         std::env::set_var("XMODIFIERS", "@im=ibus");
         if std::env::var_os("LC_CTYPE").is_none() {
-            std::env::set_var("LC_CTYPE", "zh_CN.UTF-8");
+            let locale = std::env::var_os("LANG").unwrap_or_else(|| "C.UTF-8".into());
+            std::env::set_var("LC_CTYPE", locale);
         }
     }
 
