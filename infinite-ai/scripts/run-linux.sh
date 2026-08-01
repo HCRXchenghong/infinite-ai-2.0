@@ -22,7 +22,13 @@ if [[ ! -x "$binary" ]]; then
   binary="$repo_root/crates/agent-gui/src-tauri/target/release/infinite-ai"
 fi
 if [[ -x "$binary" ]]; then
-  exec "$binary" "$@"
+  # A source binary built on a newer distribution can be present while its
+  # WebKitGTK runtime is absent on the host.  In that case prefer the
+  # self-contained AppImage below instead of opening a blank window or
+  # emitting a loader error.
+  if ! ldd "$binary" 2>/dev/null | grep -q 'not found'; then
+    exec "$binary" "$@"
+  fi
 fi
 
 appimage="${INFINITE_AI_APPIMAGE:-}"
