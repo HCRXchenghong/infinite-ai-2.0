@@ -16,6 +16,10 @@ guide.example.com {
   reverse_proxy 127.0.0.1:8083
 }
 
+account.example.com {
+  reverse_proxy 127.0.0.1:8084
+}
+
 # 浏览器只有分别访问 IPv4-only / IPv6-only 域名，才能可靠取得双栈地址。
 # invite4.example.com 只设置 A 记录；invite6.example.com 只设置 AAAA 记录。
 invite4.example.com {

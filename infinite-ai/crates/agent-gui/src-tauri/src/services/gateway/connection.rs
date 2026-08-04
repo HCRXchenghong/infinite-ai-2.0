@@ -34,14 +34,22 @@ impl GatewayController {
         let mut reconnect_delay = GATEWAY_RECONNECT_MIN;
         loop {
             let config = config_rx.borrow().clone();
-            if !config.enabled || !is_remote_configured(&config) {
+            if !self.friendgate_auth.runtime_authorized()
+                || !config.enabled
+                || !is_remote_configured(&config)
+            {
                 reconnect_delay = GATEWAY_RECONNECT_MIN;
                 self.set_outbound_sender(None);
                 self.set_outbound_control_sender(None);
                 self.set_terminal_stream_sender(None);
                 self.publish_disconnected_status(&config, None);
-                if config_rx.changed().await.is_err() {
-                    break;
+                tokio::select! {
+                    changed = config_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
                 }
                 continue;
             }
@@ -166,6 +174,11 @@ impl GatewayController {
             let receive_result = loop {
                 let watchdog_deadline = probe_deadline.unwrap_or(last_inbound + idle_timeout);
                 tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                        if !self.friendgate_auth.runtime_authorized() {
+                            break Ok(());
+                        }
+                    }
                     changed = config_rx.changed() => {
                         if changed.is_err() {
                             break Ok(());

@@ -1,4 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternalUrl } from "../../lib/desktopOpener";
 import {
   type CSSProperties,
   memo,
@@ -629,7 +629,7 @@ export const RightDockPanel = memo(function RightDockPanel(props: RightDockPanel
   );
 
   const openExternal = useCallback((url: string) => {
-    void openUrl(url);
+    void openExternalUrl(url);
   }, []);
 
   const toolContextValue = useMemo<RightDockToolContextValue>(

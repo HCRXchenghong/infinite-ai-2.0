@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -31,10 +32,18 @@ var (
 	ErrProtectedIP             = errors.New("protected IP cannot be banned")
 	ErrInvalidAdminCredentials = errors.New("invalid administrator credentials")
 	ErrAdminSetupClosed        = errors.New("administrator setup is already closed")
+	ErrUserInactive            = errors.New("desktop user is inactive")
+	ErrUserNotProvisioned      = errors.New("desktop user has no active API key")
+	ErrDesktopSessionInvalid   = errors.New("desktop session is invalid or expired")
+	ErrDesktopFlowPending      = errors.New("desktop authorization is pending")
+	ErrDesktopFlowExpired      = errors.New("desktop authorization flow expired")
+	ErrReplayDetected          = errors.New("desktop request nonce was already used")
+	ErrDesktopBodyTampered     = errors.New("desktop request body digest mismatch")
 )
 
 type Store struct {
 	db               *sql.DB
+	platform         *PlatformStore
 	vault            *Vault
 	runtimeFailureMu sync.RWMutex
 	runtimeFailure   func(string, error)
@@ -60,6 +69,20 @@ func OpenStore(cfg Config, vault *Vault) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
+	// SQLite otherwise inherits the process umask, which commonly leaves the
+	// database and WAL readable by other local users. Pre-create and tighten the
+	// main file before the driver can create its journaling sidecars.
+	file, err := os.OpenFile(databasePath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("prepare sqlite database: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("secure sqlite database: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("close prepared sqlite database: %w", err)
+	}
 	dsn := (&url.URL{Scheme: "file", Path: databasePath}).String() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -82,10 +105,47 @@ func OpenStore(cfg Config, vault *Vault) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if cfg.PlatformDatabaseURL != "" {
+		platform, platformErr := OpenPlatformStore(ctx, cfg, vault)
+		if platformErr != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("open PostgreSQL platform store: %w", platformErr)
+		}
+		store.platform = platform
+	}
+	if err := secureSQLiteRuntimeFiles(databasePath); err != nil {
+		if store.platform != nil {
+			_ = store.platform.Close()
+		}
+		_ = db.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func secureSQLiteRuntimeFiles(databasePath string) error {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		path := databasePath + suffix
+		if err := os.Chmod(path, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("secure sqlite file %s: %w", filepath.Base(path), err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) Close() error {
+	var platformErr error
+	if s.platform != nil {
+		platformErr = s.platform.Close()
+	}
+	databaseErr := s.db.Close()
+	return errors.Join(platformErr, databaseErr)
+}
+
+// Platform exposes the PostgreSQL-backed unified product domain. It is nil
+// until LITE_DATABASE_URL is configured, which keeps a running local gateway
+// operational while its data is explicitly migrated and verified.
+func (s *Store) Platform() *PlatformStore { return s.platform }
 
 func (s *Store) migrate(ctx context.Context) error {
 	const schema = `
@@ -227,6 +287,84 @@ CREATE TABLE IF NOT EXISTS key_devices (
   UNIQUE(key_id, device_token_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_key_devices_hash ON key_devices(device_token_hash);
+CREATE TABLE IF NOT EXISTS desktop_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  api_key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+  last_login_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_desktop_users_key ON desktop_users(api_key_id);
+CREATE TABLE IF NOT EXISTS user_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES desktop_users(id) ON DELETE CASCADE,
+  csrf_token TEXT NOT NULL,
+  ip TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+CREATE TABLE IF NOT EXISTS desktop_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES desktop_users(id) ON DELETE CASCADE,
+  public_key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT '',
+  mac_hash TEXT NOT NULL DEFAULT '',
+  mac_enc TEXT NOT NULL DEFAULT '',
+  registered_ip TEXT NOT NULL,
+  last_ip TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active',
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_desktop_devices_user ON desktop_devices(user_id);
+CREATE INDEX IF NOT EXISTS idx_desktop_devices_mac ON desktop_devices(mac_hash);
+CREATE TABLE IF NOT EXISTS desktop_auth_flows (
+  device_code_hash TEXT PRIMARY KEY,
+  user_code_hash TEXT NOT NULL UNIQUE,
+  public_key TEXT NOT NULL,
+  device_name TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT '',
+  mac_hash TEXT NOT NULL DEFAULT '',
+  mac_enc TEXT NOT NULL DEFAULT '',
+  request_ip TEXT NOT NULL,
+  browser_ip TEXT NOT NULL DEFAULT '',
+  user_id INTEGER REFERENCES desktop_users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at INTEGER NOT NULL,
+  approved_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_desktop_auth_flows_expiry ON desktop_auth_flows(expires_at);
+CREATE TABLE IF NOT EXISTS desktop_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES desktop_users(id) ON DELETE CASCADE,
+  device_id INTEGER NOT NULL REFERENCES desktop_devices(id) ON DELETE CASCADE,
+  access_hash TEXT NOT NULL UNIQUE,
+  refresh_hash TEXT NOT NULL UNIQUE,
+  access_expires_at INTEGER NOT NULL,
+  refresh_expires_at INTEGER NOT NULL,
+  revoked_at INTEGER NOT NULL DEFAULT 0,
+  last_ip TEXT NOT NULL DEFAULT '',
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_desktop_sessions_user ON desktop_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_desktop_sessions_device ON desktop_sessions(device_id);
+CREATE TABLE IF NOT EXISTS desktop_nonces (
+  session_id INTEGER NOT NULL REFERENCES desktop_sessions(id) ON DELETE CASCADE,
+  nonce_hash TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id, nonce_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_desktop_nonces_expiry ON desktop_nonces(expires_at);
 CREATE TABLE IF NOT EXISTS usage_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   key_id INTEGER NOT NULL,

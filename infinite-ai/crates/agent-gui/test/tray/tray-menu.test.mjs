@@ -99,7 +99,7 @@ test("runs derive from the running id set with localized count label", () => {
     ["c1"],
   );
   assert.equal(model.labels.runs, "运行中 · 1 个对话");
-  assert.equal(model.tooltip, "LiveAgent · 1 个对话运行中");
+  assert.equal(model.tooltip, "Infinite AI · 1 个对话运行中");
 });
 
 test("cron entries list all tasks with enabled checkmarks, capped at 10", () => {
@@ -182,7 +182,7 @@ test("en-US locale localizes static labels and theme summary", () => {
   const model = trayMenu.buildTrayMenuModel(baseInput({ locale: "en-US", theme: "dark" }));
 
   assert.equal(model.labels.newChat, "New Chat");
-  assert.equal(model.labels.quit, "Quit LiveAgent");
+  assert.equal(model.labels.quit, "Quit Infinite AI");
   assert.equal(model.labels.appearance, "Appearance · Dark");
   assert.equal(model.theme, "dark");
 });

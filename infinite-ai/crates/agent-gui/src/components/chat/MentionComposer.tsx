@@ -1,4 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternalUrl } from "../../lib/desktopOpener";
 import {
   type ClipboardEvent,
   type FocusEvent,
@@ -2058,7 +2058,7 @@ function CommitMentionTooltip({
             <button
               type="button"
               className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-primary hover:bg-primary/10"
-              onClick={() => void openUrl(commit.githubUrl!)}
+              onClick={() => void openExternalUrl(commit.githubUrl!)}
             >
               <GitHubMarkIcon className="h-3 w-3" />
               {t("chat.composer.commitTooltipOpenGithub")}

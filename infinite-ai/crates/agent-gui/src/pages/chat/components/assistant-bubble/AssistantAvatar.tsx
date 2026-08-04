@@ -15,7 +15,7 @@ export function AssistantAvatar(props: { className?: string }) {
         alt=""
         aria-hidden="true"
         draggable={false}
-        className="h-6 w-6 select-none object-contain"
+        className="h-6 w-6 select-none object-contain dark:invert"
       />
     </div>
   );

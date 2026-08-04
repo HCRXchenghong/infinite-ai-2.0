@@ -5,6 +5,7 @@ import type { SettingsSaveState } from "../../lib/settings/storage";
 export type SetSettingsFn = (updater: (prev: AppSettings) => AppSettings) => void;
 
 export type SectionId =
+  | "friendgate"
   | "system"
   | "shortcuts"
   | "systemTools"

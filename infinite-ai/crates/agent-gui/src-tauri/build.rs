@@ -39,7 +39,11 @@ fn main() {
     println!("cargo:rerun-if-changed={}", proto_v2.display());
     println!("cargo:rerun-if-changed={}", proto_v2_ws.display());
 
-    prost_build::Config::new()
+    let mut proto_config = prost_build::Config::new();
+    // Ubuntu 20.04/22.04 ship protoc versions that understand proto3 optional
+    // fields but still require the compatibility switch explicitly.
+    proto_config.protoc_arg("--experimental_allow_proto3_optional");
+    proto_config
         .compile_protos(&[proto_v2, proto_v2_ws], &[gateway_root])
         .expect("compile gateway protos");
 

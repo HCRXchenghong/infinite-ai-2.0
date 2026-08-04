@@ -52,7 +52,7 @@ test("readonly happy path: identity prompts, filtered child tools, SendMessage a
   );
   assert.equal(call.sessionId, "parent-session:subagent:reviewer-a");
   assert.equal(call.workdir, "/tmp/liveagent-subagent-test");
-  assert.match(call.context.systemPrompt, /You are Code Reviewer, a named delegated LiveAgent subagent/);
+  assert.match(call.context.systemPrompt, /You are Code Reviewer, a named delegated Infinite AI subagent/);
   assert.match(call.context.systemPrompt, /- Stable id: reviewer-a/);
   assert.match(call.context.systemPrompt, /- Role: Review code paths/);
   assert.match(call.context.systemPrompt, /- Team position: 1 of 1/);

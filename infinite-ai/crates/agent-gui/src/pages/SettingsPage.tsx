@@ -10,6 +10,7 @@ import {
   Key,
   Keyboard,
   Settings2,
+  Shield,
   Wrench,
   Zap,
 } from "../components/icons";
@@ -20,6 +21,7 @@ import { AboutSection } from "./settings/AboutSection";
 import { AgentsSection } from "./settings/AgentsSection";
 import { CronSection } from "./settings/CronSection";
 import { GlobalShortcutsSection } from "./settings/GlobalShortcutsSection";
+import { FriendGateSection } from "./settings/FriendGateSection";
 import { HooksSection } from "./settings/HooksSection";
 import { MemoryPanel } from "./settings/memory/MemoryPanel";
 import { ProvidersSection } from "./settings/ProvidersSection";
@@ -95,6 +97,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "settings.groupGeneral",
     items: [
+      { id: "friendgate", icon: <Shield className="h-3.5 w-3.5" /> },
       { id: "system", icon: <Settings2 className="h-3.5 w-3.5" /> },
       { id: "providers", icon: <Cpu className="h-3.5 w-3.5" /> },
       { id: "agents", icon: <BookOpen className="h-3.5 w-3.5" /> },
@@ -144,6 +147,7 @@ export function SettingsPage(props: SettingsPageProps) {
   const [section, setSection] = useState<SectionId>(initialSection);
 
   const sectionLabels: Record<SectionId, string> = {
+    friendgate: "Infinite AI 账号",
     system: t("settings.navSystem"),
     shortcuts: t("settings.navShortcuts"),
     systemTools: t("settings.navSystemTools"),
@@ -184,6 +188,8 @@ export function SettingsPage(props: SettingsPageProps) {
   const saveIndicator = getSaveIndicator(saveState, t);
   const sectionContent = (() => {
     switch (section) {
+      case "friendgate":
+        return <FriendGateSection />;
       case "providers":
         return <ProvidersSection settings={settings} setSettings={setSettings} />;
       case "system":

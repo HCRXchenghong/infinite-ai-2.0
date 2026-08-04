@@ -8,7 +8,7 @@ function showBootFailure(detail) {
 
 if (!window.Vue || !window.ElementPlus) {
   showBootFailure('前端依赖加载失败。请检查 /vendor/vue.global.prod.js 和 /vendor/element-plus.full.min.js。');
-  throw new Error('FriendGate admin dependencies failed to load');
+  throw new Error('Infinite AI admin dependencies failed to load');
 }
 
 const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, watch } = Vue;
@@ -38,7 +38,11 @@ createApp({
     const accounts = ref([]);
     const accountModels = ref({ models: [], accounts: [], model_count: 0, updated_at: 0 });
     const keys = ref([]);
+    const desktopUsers = ref([]);
+    const desktopDevices = ref([]);
+    const desktopPolicy = ref({});
     const invites = ref([]);
+	const platform = reactive({ overview: {}, dashboard: {}, models: [], publications: [], plans: [], providers: [], upstreamAccounts: [], routePools: [], routeTargets: [], users: [], devices: [], wallets: [], paymentProviders: [], paymentOrders: [], apiKeys: [], usage: [], audits: [], invitations: [], registrationMode: '', error: '', loaded: false, loading: false });
     const bans = ref([]);
     const usage = ref([]);
     const logs = ref({ security: [], audit: [] });
@@ -89,6 +93,21 @@ createApp({
     const keyRowLoading = reactive({});
     const inviteRowLoading = reactive({});
     const accountRowLoading = reactive({});
+    const desktopUserRowLoading = reactive({});
+    const desktopDeviceRowLoading = reactive({});
+    const desktopUserKeyDrafts = reactive({});
+    const desktopUserKeyDirty = reactive({});
+    const desktopPolicySaving = ref(false);
+    const desktopPolicyForm = reactive({
+      registration_enabled: true,
+	  external_api_mode: 'authenticated_public',
+      public_api_enabled: true,
+      official_desktop_only: false,
+      provider_name: 'Infinite AI',
+      default_model: 'gpt-5.6',
+      allowed_models: [],
+      system_prompt: ''
+    });
     const banRowLoading = reactive({});
     let loadSequence = 0;
     let pollTimer = 0;
@@ -97,7 +116,8 @@ createApp({
     let clockTimer = 0;
     const mobileTabs = [
       { label: '仪表盘', value: 'dashboard' }, { label: '账号', value: 'accounts' },
-      { label: '邀请', value: 'invitations' }, { label: '密钥', value: 'keys' }, { label: '系统', value: 'system' }
+      { label: '统一平台', value: 'platform' }, { label: '桌面用户', value: 'desktop' }, { label: '邀请', value: 'invitations' },
+      { label: '密钥', value: 'keys' }, { label: '系统', value: 'system' }
     ];
     const validTabs = new Set(mobileTabs.map(item => item.value));
     const healthColors = [{ color: '#b85460', percentage: 60 }, { color: '#a87938', percentage: 85 }, { color: '#3a82ad', percentage: 100 }];
@@ -105,6 +125,8 @@ createApp({
     const pageMeta = computed(() => ({
       dashboard: { title: '仪表盘', subtitle: '服务器资源、调用量与模型使用的最近同步概览' },
       accounts: { title: 'ChatGPT 账号', subtitle: 'OAuth 授权、真实额度同步与重置管理' },
+      platform: { title: 'Infinite AI 统一平台', subtitle: 'PostgreSQL 平台模型、上游路由、用户、套餐与新 API Key 的真实配置' },
+      desktop: { title: 'Infinite AI 用户', subtitle: '桌面登录、设备撤销、模型与系统提示词统一下发' },
       invitations: { title: '邀请管理', subtitle: '一次性邀请、识别码与领取状态' },
       keys: { title: 'API 密钥', subtitle: '密钥额度、设备与 IPv4 / IPv6 授权' },
       system: { title: '系统与记录', subtitle: '安全拦截、请求记录与后台操作审计' }
@@ -136,6 +158,7 @@ createApp({
     const modelRanking = computed(() => dashboard.value.model_ranking || []);
     const quotaErrorCount = computed(() => accounts.value.filter(item => item.quota_error).length);
     const modelCatalogModels = computed(() => Array.isArray(accountModels.value.models) ? accountModels.value.models : []);
+    const desktopKeyOptions = computed(() => keys.value.filter(item => item.status !== 'deleted'));
     const modelCatalogCount = computed(() => {
       const reported = Number(accountModels.value.model_count);
       return Number.isFinite(reported) && reported >= 0 ? reported : modelCatalogModels.value.length;
@@ -289,7 +312,14 @@ createApp({
     function safePercent(value) { return Math.max(0, Math.min(100, Number(value) || 0)); }
     function resourceColor(value) { const percent = safePercent(value); return percent >= 90 ? '#b85460' : percent >= 75 ? '#a87938' : '#3a82ad'; }
     function modelRankPercent(value) { return Math.round((Number(value) || 0) * 100 / maxModelCalls.value); }
-    function when(value) { return value ? new Date(value * 1000).toLocaleString('zh-CN') : '—'; }
+    function when(value) {
+      if (value === null || value === undefined || value === '') return '—';
+      const numeric = Number(value);
+      const date = Number.isFinite(numeric)
+        ? new Date(Math.abs(numeric) < 100000000000 ? numeric * 1000 : numeric)
+        : new Date(value);
+      return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN');
+    }
     function hasQuota(account, field) {
       if (!account || !(Number(account.quota_updated_at) > 0)) return false;
       const value = Number(account[field]);
@@ -350,6 +380,9 @@ createApp({
       accounts.value = [];
       accountModels.value = { models: [], accounts: [], model_count: 0, updated_at: 0 };
       keys.value = [];
+      desktopUsers.value = [];
+      desktopDevices.value = [];
+      desktopPolicy.value = {};
       invites.value = [];
       bans.value = [];
       usage.value = [];
@@ -366,6 +399,10 @@ createApp({
       clearReactiveObject(keyRowLoading);
       clearReactiveObject(inviteRowLoading);
       clearReactiveObject(accountRowLoading);
+      clearReactiveObject(desktopUserRowLoading);
+      clearReactiveObject(desktopDeviceRowLoading);
+      clearReactiveObject(desktopUserKeyDrafts);
+      clearReactiveObject(desktopUserKeyDirty);
       clearReactiveObject(banRowLoading);
       try { ElMessageBox.close(); } catch {}
     }
@@ -394,6 +431,40 @@ createApp({
     function setKeyRowLoading(key, action = '') { if (action) keyRowLoading[String(key.id)] = action; else delete keyRowLoading[String(key.id)]; }
     function setInviteRowLoading(invite, action = '') { if (action) inviteRowLoading[String(invite.id)] = action; else delete inviteRowLoading[String(invite.id)]; }
     function setAccountRowLoading(account, action = '') { if (action) accountRowLoading[String(account.id)] = action; else delete accountRowLoading[String(account.id)]; }
+    function syncDesktopUserDrafts(items) {
+      const currentIDs = new Set(items.map(item => String(item.id)));
+      items.forEach(item => {
+        const id = String(item.id);
+        if (!Object.prototype.hasOwnProperty.call(desktopUserKeyDrafts, id) || !desktopUserKeyDirty[id]) {
+          desktopUserKeyDrafts[id] = Number(item.api_key_id) || 0;
+          desktopUserKeyDirty[id] = false;
+        } else {
+          desktopUserKeyDirty[id] = Number(desktopUserKeyDrafts[id]) !== Number(item.api_key_id || 0);
+        }
+      });
+      Object.keys(desktopUserKeyDrafts).forEach(id => {
+        if (!currentIDs.has(id)) {
+          delete desktopUserKeyDrafts[id];
+          delete desktopUserKeyDirty[id];
+          delete desktopUserRowLoading[id];
+        }
+      });
+    }
+    function markDesktopUserKeyDirty(user) { desktopUserKeyDirty[String(user.id)] = Number(desktopUserKeyDrafts[String(user.id)]) !== Number(user.api_key_id || 0); }
+    function applyDesktopPolicy(payload) {
+      const value = payload && typeof payload === 'object' ? payload : {};
+      desktopPolicy.value = value;
+      Object.assign(desktopPolicyForm, {
+        registration_enabled: value.registration_enabled !== false,
+		external_api_mode: String(value.external_api_mode || 'authenticated_public'),
+        public_api_enabled: value.public_api_enabled !== false,
+        official_desktop_only: value.official_desktop_only === true,
+        provider_name: String(value.provider_name || 'Infinite AI'),
+        default_model: String(value.default_model || 'gpt-5.6'),
+        allowed_models: Array.isArray(value.allowed_models) ? [...value.allowed_models] : [],
+        system_prompt: String(value.system_prompt || '')
+      });
+    }
     function setBanRowLoading(item, active) { if (active) banRowLoading[item.ip] = true; else delete banRowLoading[item.ip]; }
 	async function refreshBanListAfterMutation() {
 	  try {
@@ -462,6 +533,9 @@ createApp({
         { name: '账号', path: '/api/accounts', apply: data => { accounts.value = data.items || []; } },
         { name: '模型目录', state: 'models', path: '/api/accounts/models', apply: applyAccountModels },
         { name: 'API 密钥', path: '/api/keys', apply: data => { const items = data.items || []; keys.value = items; syncKeyQuotaDrafts(items); } },
+        { name: '桌面用户', path: '/api/desktop/users', apply: data => { const items = data.items || []; desktopUsers.value = items; syncDesktopUserDrafts(items); } },
+        { name: '桌面设备', path: '/api/desktop/devices', apply: data => { desktopDevices.value = data.items || []; } },
+        { name: '桌面策略', path: '/api/desktop/policy', apply: applyDesktopPolicy },
         { name: '邀请', path: '/api/invitations', apply: data => { invites.value = data.items || []; } },
         { name: 'IP 黑名单', state: 'bans', path: '/api/system/bans', apply: data => { bans.value = data.items || []; } },
         { name: '使用记录', state: 'usage', path: '/api/system/usage', apply: applyUsageData },
@@ -499,6 +573,252 @@ createApp({
       if (successCount > 0) lastRefreshAt.value = nowSeconds.value;
       if (errors.length && !silent) message(`部分数据未更新（${errors.length} 项），旧数据已保留`, 'warning');
       loading.value = false;
+    }
+
+    async function loadPlatform(options = {}) {
+      if (!authenticated.value || platform.loading) return;
+      platform.loading = true;
+      if (!options.silent) platform.error = '';
+      const endpoints = [
+        ['overview', '/api/platform/overview'], ['dashboard', '/api/platform/dashboard'], ['models', '/api/platform/models'], ['publications', '/api/platform/model-publications'],
+        ['plans', '/api/platform/plans'], ['providers', '/api/platform/providers'], ['upstreamAccounts', '/api/platform/upstream-accounts'],
+		['routePools', '/api/platform/route-pools'], ['routeTargets', '/api/platform/route-targets'], ['users', '/api/platform/users'], ['devices', '/api/platform/devices'],
+        ['wallets', '/api/platform/wallets'], ['paymentProviders', '/api/platform/payments/providers'], ['paymentOrders', '/api/platform/payments/orders?limit=100'], ['apiKeys', '/api/platform/api-keys'], ['usage', '/api/platform/usage?limit=100'],
+        ['audits', '/api/platform/audits?limit=100'], ['invitations', '/api/platform/user-invitations'], ['registration', '/api/platform/settings/registration']
+      ];
+      const results = await Promise.allSettled(endpoints.map(([name, path]) => apiWithTimeout(path, {}, 15000)));
+      const failure = results.find(item => item.status === 'rejected');
+      if (failure) {
+        platform.error = failure.reason?.message || '统一平台数据读取失败';
+        platform.loaded = true;
+        platform.loading = false;
+        return;
+      }
+      const values = Object.fromEntries(endpoints.map(([name], index) => [name, results[index].value]));
+      platform.overview = values.overview || {};
+	  platform.dashboard = values.dashboard || {};
+      platform.models = Array.isArray(values.models) ? values.models : [];
+      platform.publications = Array.isArray(values.publications) ? values.publications : [];
+      platform.plans = Array.isArray(values.plans) ? values.plans : [];
+      platform.providers = Array.isArray(values.providers) ? values.providers : [];
+      platform.upstreamAccounts = Array.isArray(values.upstreamAccounts) ? values.upstreamAccounts : [];
+      platform.routePools = Array.isArray(values.routePools) ? values.routePools : [];
+      platform.routeTargets = Array.isArray(values.routeTargets) ? values.routeTargets : [];
+      platform.users = Array.isArray(values.users) ? values.users : [];
+	  platform.devices = Array.isArray(values.devices?.items) ? values.devices.items : [];
+	  platform.wallets = Array.isArray(values.wallets) ? values.wallets : [];
+	  platform.paymentProviders = Array.isArray(values.paymentProviders) ? values.paymentProviders : [];
+	  platform.paymentOrders = Array.isArray(values.paymentOrders) ? values.paymentOrders : [];
+      platform.apiKeys = Array.isArray(values.apiKeys) ? values.apiKeys : [];
+	  platform.usage = Array.isArray(values.usage) ? values.usage : [];
+	  platform.audits = Array.isArray(values.audits) ? values.audits : [];
+	  platform.invitations = Array.isArray(values.invitations) ? values.invitations : [];
+      platform.registrationMode = String(values.registration?.mode || '');
+      platform.error = '';
+      platform.loaded = true;
+      platform.loading = false;
+    }
+
+    async function platformPrompt(title, message, options = {}) {
+      const result = await ElMessageBox.prompt(message, title, { confirmButtonText: '继续', cancelButtonText: '取消', inputValue: options.value || '', inputPlaceholder: options.placeholder || '', inputType: options.password ? 'password' : 'text', inputValidator: value => options.optional || String(value || '').trim() ? true : '此项不能为空' });
+      return String(result.value || '').trim();
+    }
+    async function createPlatformModel() {
+      try {
+        const model_key = await platformPrompt('创建平台模型', '稳定模型标识（例如 infinite-pro）', { placeholder: 'infinite-pro' });
+        const display_name = await platformPrompt('创建平台模型', '用户侧显示名称', { placeholder: 'Infinite Pro' });
+        const category = await platformPrompt('创建平台模型', '类别：chat、image、audio、embedding 或 multimodal', { value: 'chat' });
+        await api('/api/platform/models', { method: 'POST', body: JSON.stringify({ model_key, display_name, category, description: '', capabilities: {}, billing: {}, status: 'active' }) });
+        message('平台模型已创建'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '已取消创建', 'error'); }
+    }
+    async function publishPlatformModel() {
+      try {
+        const model_id = await platformPrompt('发布平台模型', '平台模型 ID（可从下方模型表复制）');
+        const product_scope = await platformPrompt('发布平台模型', '产品范围：chat、agent 或 external_api', { value: 'chat' });
+        const protocol = await platformPrompt('发布平台模型', '协议：responses、chat_completions、messages 或 generate_content', { value: 'responses' });
+        await api('/api/platform/model-publications', { method: 'PUT', body: JSON.stringify({ model_id, product_scope, protocol, enabled: true, default_for_scope: false, plan_rules: {} }) });
+        message('模型发布配置已保存'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '已取消发布', 'error'); }
+    }
+    async function createPlatformProvider() {
+      try {
+        const provider_name = await platformPrompt('添加兼容上游', '连接名称（小写字母、数字、连字符）', { placeholder: 'provider-a' });
+        const provider_kind = await platformPrompt('添加兼容上游', '类型：openai_compatible、anthropic_compatible 或 gemini_compatible', { value: 'openai_compatible' });
+        const base_url = await platformPrompt('添加兼容上游', '兼容 Base URL（例如 https://api.example.com/v1）', { placeholder: 'https://api.example.com/v1' });
+        const credential = await platformPrompt('添加兼容上游', '上游 API Key（仅加密保存）', { password: true });
+        await api('/api/platform/providers', { method: 'POST', body: JSON.stringify({ provider_kind, provider_name, base_url, credential, settings: {}, status: 'active' }) });
+        message('兼容上游已保存；请在账号列表创建账号并同步模型'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '已取消添加', 'error'); }
+    }
+    async function createPlatformRoutePool() {
+      try {
+        const name = await platformPrompt('创建路由池', '路由池名称', { placeholder: 'primary-pool' });
+        await api('/api/platform/route-pools', { method: 'POST', body: JSON.stringify({ name, selection_policy: 'quota_aware' }) });
+        message('路由池已创建'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '已取消创建', 'error'); }
+    }
+    async function createPlatformAPIKey() {
+      try {
+        const user_id = await platformPrompt('创建新 API Key', '用户 ID（可从下方用户表复制）');
+        const model_id = await platformPrompt('创建新 API Key', '允许的平台模型 ID');
+        const label = await platformPrompt('创建新 API Key', 'Key 备注');
+        const created = await api('/api/platform/api-keys', { method: 'POST', body: JSON.stringify({ user_id, label, scopes: [{ product_scope: 'external_api', model_id }], ip_policy: { mode: 'unrestricted' }, device_policy: { mode: 'unrestricted' } }) });
+        await navigator.clipboard.writeText(created.plain_key);
+        message('新 Key 已创建并复制到剪贴板；请立即安全保存'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '已取消创建', 'error'); }
+    }
+    async function togglePlatformKey(item) {
+      const status = item.status === 'active' ? 'disabled' : 'active';
+      try { await api(`/api/platform/api-keys/${item.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); message(status === 'active' ? 'Key 已启用' : 'Key 已停用，并已取消在途请求'); await loadPlatform({ silent: true }); }
+      catch (error) { message(error.message, 'error'); }
+    }
+    async function copyPlatformKey(item) {
+      try { const result = await api(`/api/platform/api-keys/${item.id}/copy`, { method: 'POST', body: '{}' }); await navigator.clipboard.writeText(result.plain_key); message('Key 已复制到剪贴板'); }
+      catch (error) { message(error.message, 'error'); }
+    }
+    async function deletePlatformKey(item) {
+      try {
+        await ElMessageBox.confirm(`确定删除新 API Key“${item.label}”？删除会立即取消在途请求，密文不可恢复。`, '删除新 API Key', { type: 'error', confirmButtonText: '删除', cancelButtonText: '取消' });
+        await api(`/api/platform/api-keys/${item.id}`, { method: 'DELETE' }); message('Key 已删除，并已取消在途请求'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel' && error !== 'close') message(error.message || '删除失败', 'error'); }
+    }
+    async function createPlatformUpstreamAccount() {
+      try {
+        const connection_id = await platformPrompt('创建上游账号', '连接 ID（从上游连接表复制）');
+        const label = await platformPrompt('创建上游账号', '账号备注', { placeholder: '主账号 A' });
+        const credential = await platformPrompt('创建上游账号', '账号专属 API Key（留空时使用连接凭证）', { password: true, optional: true });
+        await api('/api/platform/upstream-accounts', { method: 'POST', body: JSON.stringify({ connection_id, label, credential, external_reference: label, model_catalog: [], quota_state: {}, status: 'active' }) });
+        message('上游账号已创建，请同步模型后再添加到路由池'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '已取消创建', 'error'); }
+    }
+    async function syncPlatformAccountModels(item) {
+      try { const models = await api(`/api/platform/upstream-accounts/${item.id}/models/sync`, { method: 'POST', body: '{}' }); message(`已同步 ${Array.isArray(models) ? models.length : 0} 个上游模型`); await loadPlatform({ silent: true }); }
+      catch (error) { message(error.message || '模型同步失败', 'error'); }
+    }
+    async function togglePlatformProvider(item) {
+      const status = item.status === 'active' ? 'disabled' : 'active';
+      try { await api(`/api/platform/providers/${item.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); message(status === 'active' ? '上游连接已启用' : '上游连接已停用'); await loadPlatform({ silent: true }); }
+      catch (error) { message(error.message || '操作失败', 'error'); }
+    }
+    async function testPlatformProvider(item) {
+      try { const result = await api(`/api/platform/providers/${item.id}/health`, { method: 'POST', body: '{}' }); message(result.healthy ? `连接正常（HTTP ${result.status_code}）` : (result.error || '连接测试失败'), result.healthy ? 'success' : 'warning'); await loadPlatform({ silent: true }); }
+      catch (error) { message(error.message || '连接测试失败', 'error'); }
+    }
+    async function deletePlatformProvider(item) {
+      try { await ElMessageBox.confirm(`删除上游连接“${item.provider_name}”？其账号会一起删除，并立即移出路由。`, '删除上游连接', { type: 'error', confirmButtonText: '删除', cancelButtonText: '取消' }); await api(`/api/platform/providers/${item.id}`, { method: 'DELETE' }); message('上游连接已删除'); await loadPlatform({ silent: true }); }
+      catch (error) { if (error !== 'cancel' && error !== 'close') message(error.message || '删除失败', 'error'); }
+    }
+    async function togglePlatformUpstreamAccount(item) {
+      const status = item.status === 'active' ? 'disabled' : 'active';
+      try { await api(`/api/platform/upstream-accounts/${item.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); message(status === 'active' ? '上游账号已启用' : '上游账号已停用并立即退出调度'); await loadPlatform({ silent: true }); }
+      catch (error) { message(error.message || '操作失败', 'error'); }
+    }
+    async function deletePlatformUpstreamAccount(item) {
+      try { await ElMessageBox.confirm(`删除上游账号“${item.label}”？该账号会立即从所有路由池中移除。`, '删除上游账号', { type: 'error', confirmButtonText: '删除', cancelButtonText: '取消' }); await api(`/api/platform/upstream-accounts/${item.id}`, { method: 'DELETE' }); message('上游账号已删除'); await loadPlatform({ silent: true }); }
+      catch (error) { if (error !== 'cancel' && error !== 'close') message(error.message || '删除失败', 'error'); }
+    }
+    async function addPlatformRoutePoolMember() {
+      try {
+        const route_pool_id = await platformPrompt('添加路由池成员', '路由池 ID');
+        const upstream_account_id = await platformPrompt('添加路由池成员', '上游账号 ID');
+        await api('/api/platform/route-pool-members', { method: 'POST', body: JSON.stringify({ route_pool_id, upstream_account_id, priority: 100, weight: 100, enabled: true }) });
+        message('账号已加入路由池'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '操作失败', 'error'); }
+    }
+    async function createPlatformRouteTarget() {
+      try {
+        const model_id = await platformPrompt('创建路由目标', '平台模型 ID');
+        const route_pool_id = await platformPrompt('创建路由目标', '路由池 ID');
+        const upstream_model_id = await platformPrompt('创建路由目标', '上游私有模型 ID');
+        const product_scope = await platformPrompt('创建路由目标', '产品范围：chat、agent 或 external_api', { value: 'chat' });
+        const protocol = await platformPrompt('创建路由目标', '协议：responses、chat_completions、messages 或 generate_content', { value: 'responses' });
+        await api('/api/platform/route-targets', { method: 'POST', body: JSON.stringify({ model_id, route_pool_id, upstream_model_id, product_scope, protocol, priority: 100, enabled: true }) });
+        message('路由目标已创建'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '操作失败', 'error'); }
+    }
+    async function setPlatformRegistrationMode() {
+      try {
+        const mode = await platformPrompt('用户注册策略', 'closed、invite_only 或 public', { value: platform.registrationMode || 'invite_only' });
+        await api('/api/platform/settings/registration', { method: 'PUT', body: JSON.stringify({ mode }) }); message('注册策略已立即生效'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '保存失败', 'error'); }
+    }
+    async function updatePlatformPlan(item) {
+      try {
+        const current = item.current || {};
+        const price = await platformPrompt(`编辑 ${item.display_name}`, '月价最小货币单位（例如 USD 分）', { value: String(current.monthly_price_minor || 0) });
+        const chatMonthly = await platformPrompt(`编辑 ${item.display_name}`, 'Chat 每月 Token', { value: String(current.chat_monthly_tokens || 0) });
+        const agentMonthly = await platformPrompt(`编辑 ${item.display_name}`, 'Agent 每月 Token', { value: String(current.agent_monthly_tokens || 0) });
+        const chatRolling = await platformPrompt(`编辑 ${item.display_name}`, 'Chat 五小时 Token', { value: String(current.chat_rolling_5h_tokens || 0) });
+        const agentRolling = await platformPrompt(`编辑 ${item.display_name}`, 'Agent 五小时 Token', { value: String(current.agent_rolling_5h_tokens || 0) });
+        const numeric = [price, chatMonthly, agentMonthly, chatRolling, agentRolling].map(value => Number(value));
+        if (numeric.some(value => !Number.isSafeInteger(value) || value < 0)) throw new Error('所有价格和额度都必须是非负整数');
+        await ElMessageBox.confirm('这会创建新的套餐版本，仅影响之后创建或续期的套餐；现有账本不会被改写。', `确认更新 ${item.display_name}`, { type: 'warning', confirmButtonText: '创建新版本', cancelButtonText: '取消' });
+        await api(`/api/platform/plans/${encodeURIComponent(item.code)}/version`, { method: 'PUT', body: JSON.stringify({ currency: current.currency || 'USD', monthly_price_minor: numeric[0], chat_monthly_tokens: numeric[1], agent_monthly_tokens: numeric[2], chat_rolling_5h_tokens: numeric[3], agent_rolling_5h_tokens: numeric[4], entitlements: current.entitlements || {}, model_rules: current.model_rules || {} }) });
+        message('套餐新版本已生效于后续分配'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel' && error !== 'close') message(error.message || '套餐更新失败', 'error'); }
+    }
+    async function createPlatformUserInvitation() {
+      try {
+        const role_label = await platformPrompt('新建用户邀请', '角色或备注名称', { placeholder: '王同学' });
+        const expiresHours = await platformPrompt('新建用户邀请', '有效时长（小时）', { value: '168' });
+        const hours = Number(expiresHours);
+        if (!Number.isFinite(hours) || hours < 1 || hours > 8760) throw new Error('有效时长必须为 1–8760 小时');
+        const result = await api('/api/platform/user-invitations', { method: 'POST', body: JSON.stringify({ role_label, policy: {}, expires_at: new Date(Date.now() + hours * 3600 * 1000).toISOString() }) });
+        await ElMessageBox.alert(`邀请令牌：${result.token}\n识别码：${result.code}\n\n请在 Infinite AI Chat 注册页填写这两项。识别码只在此处显示，请安全发送。`, '用户邀请已创建', { confirmButtonText: '已保存' });
+        await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel' && error !== 'close') message(error.message || '创建失败', 'error'); }
+    }
+    async function revokePlatformInvitation(item) {
+      try { await api(`/api/platform/user-invitations/${item.id}/revoke`, { method: 'POST', body: '{}' }); message('邀请已撤销，无法继续注册'); await loadPlatform({ silent: true }); }
+      catch (error) { message(error.message || '撤销失败', 'error'); }
+    }
+    async function deletePlatformInvitation(item) {
+      try { await ElMessageBox.confirm('删除该邀请记录？已领取或已撤销的邀请不会再被使用。', '删除邀请记录', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }); await api(`/api/platform/user-invitations/${item.id}`, { method: 'DELETE' }); message('邀请记录已删除'); await loadPlatform({ silent: true }); }
+      catch (error) { if (error !== 'cancel' && error !== 'close') message(error.message || '删除失败', 'error'); }
+    }
+    async function togglePlatformUser(item) {
+      const status = item.status === 'active' ? 'suspended' : 'active';
+      try { await api(`/api/platform/users/${item.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); message(status === 'active' ? '用户已启用' : '用户已停用，网页会话和外部 Key 已立即撤销'); await loadPlatform({ silent: true }); }
+      catch (error) { message(error.message || '操作失败', 'error'); }
+    }
+    async function revokePlatformDevice(item) {
+      try {
+        await ElMessageBox.confirm(`确定立即撤销设备“${item.device_name}”？该设备的 Agent 会话、本地子 Key 和在途调用会同时失效。`, '撤销 Agent 设备', { type: 'warning', confirmButtonText: '立即撤销', cancelButtonText: '取消' });
+        await api(`/api/platform/devices/${item.id}`, { method: 'DELETE' });
+        message('设备已撤销，关联 Agent 会话和本地子 Key 已立即失效');
+        await loadPlatform({ silent: true });
+      } catch (error) {
+        if (error !== 'cancel' && error !== 'close') message(error.message || '撤销设备失败', 'error');
+      }
+    }
+    async function creditPlatformWallet(item) {
+      try {
+        const tokensText = await platformPrompt('手工充值 Token', `${item.display_name || item.user_email} · ${item.product_scope} 钱包增加 Token`, { placeholder: '100000' });
+        const tokens = Number(tokensText);
+        if (!Number.isSafeInteger(tokens) || tokens <= 0) throw new Error('请输入正整数 Token 数');
+        const reason = await platformPrompt('手工充值 Token', '操作原因（必填，写入审计）', { placeholder: '人工充值' });
+        await ElMessageBox.confirm(`确认向 ${item.product_scope} 钱包增加 ${formatNumber(tokens)} Token？Chat、Agent 与外部 API 彼此独立。`, '确认充值', { type: 'warning', confirmButtonText: '确认充值', cancelButtonText: '取消' });
+        await api(`/api/platform/users/${item.user_id}/wallets/${item.product_scope}/credit`, { method: 'POST', body: JSON.stringify({ tokens, reason }) }); message('Token 已充值并写入不可变账本'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel' && error !== 'close') message(error.message || '充值失败', 'error'); }
+    }
+    async function createPaymentProvider() {
+      try {
+        const provider_type = await platformPrompt('保存支付配置', '支付类型（例如 stripe、alipay 或 wechat_pay）', { value: 'stripe' });
+        const merchant_id = await platformPrompt('保存支付配置', '商户号 / 账号 ID');
+        const configurationText = await platformPrompt('保存支付配置', '配置 JSON（仅加密保存，当前不会启用）', { value: '{}' });
+        let configuration = {};
+        try { configuration = JSON.parse(configurationText || '{}'); } catch { throw new Error('配置必须是 JSON 对象'); }
+        if (!configuration || Array.isArray(configuration) || typeof configuration !== 'object') throw new Error('配置必须是 JSON 对象');
+        await api('/api/platform/payments/providers', { method: 'POST', body: JSON.stringify({ provider_type, merchant_id, configuration, enabled: false }) });
+        message('支付配置已加密保存，真实商户验签/对账完成前保持未启用'); await loadPlatform({ silent: true });
+      } catch (error) { if (error !== 'cancel') message(error.message || '已取消保存', 'error'); }
+    }
+    async function disablePaymentProvider(item) {
+      try {
+        await api(`/api/platform/payments/providers/${item.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: false }) });
+        message('支付配置已保持停用'); await loadPlatform({ silent: true });
+      } catch (error) { message(error.message || '支付配置更新失败', 'error'); }
     }
 
     async function login() {
@@ -550,6 +870,7 @@ createApp({
       if (typeof value !== 'string' || !validTabs.has(value)) return;
       tab.value = value;
       if (window.location.hash !== `#/${value}`) window.location.hash = `/${value}`;
+	  if (value === 'platform') void loadPlatform();
     }
     function openAccountDialog() { accountDialogVisible.value = true; }
     function resetAccountDialog() { oauth.sessionId = ''; oauth.url = ''; oauth.callbackURL = ''; oauth.loading = false; oauth.completing = false; oauthForm.name = ''; manualAccount.name = ''; manualAccount.auth = ''; accountMethod.value = 'oauth'; }
@@ -673,6 +994,78 @@ createApp({
         dataState.models.error = error.message || '模型目录刷新失败';
         message(dataState.models.error, 'error');
       } finally { modelRefreshing.value = false; }
+    }
+
+    async function saveDesktopUserKey(user) {
+      const id = String(user.id);
+      if (desktopUserRowLoading[id]) return;
+      const apiKeyID = Number(desktopUserKeyDrafts[id]) || 0;
+      desktopUserRowLoading[id] = 'key';
+      try {
+        await api(`/api/desktop/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ status: user.status, api_key_id: apiKeyID }) });
+        user.api_key_id = apiKeyID;
+        user.key_role = desktopKeyOptions.value.find(item => Number(item.id) === apiKeyID)?.role || '';
+        desktopUserKeyDirty[id] = false;
+        message(apiKeyID ? '桌面用户已绑定该 Key，下一次请求立即使用新归属' : '已取消该用户的 Key 授权，后续调用立即停止');
+        void loadAll({ silent: true });
+      } catch (error) {
+        message(error.message || '保存用户授权失败', 'error');
+        if (authenticated.value) await loadAll({ silent: true });
+      } finally { delete desktopUserRowLoading[id]; }
+    }
+
+    async function toggleDesktopUser(user) {
+      const id = String(user.id);
+      if (desktopUserRowLoading[id]) return;
+      const disabling = user.status === 'active';
+      desktopUserRowLoading[id] = 'status';
+      try {
+        if (disabling) await ElMessageBox.confirm(`停用 ${user.display_name || user.email} 后，网页与全部桌面会话会立即失效。`, '停用 Infinite AI 用户', { type: 'warning', confirmButtonText: '立即停用', cancelButtonText: '取消' });
+        const status = disabling ? 'disabled' : 'active';
+        await api(`/api/desktop/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ status, api_key_id: Number(user.api_key_id) || 0 }) });
+        user.status = status;
+        message(disabling ? '用户已停用，全部登录会话已立即撤销' : '用户已启用');
+        void loadAll({ silent: true });
+      } catch (error) {
+        if (error !== 'cancel' && error !== 'close') message(error.message || '更新用户状态失败', 'error');
+      } finally { delete desktopUserRowLoading[id]; }
+    }
+
+    async function revokeDesktopDevice(device) {
+      const id = String(device.id);
+      if (desktopDeviceRowLoading[id] || device.status !== 'active') return;
+      desktopDeviceRowLoading[id] = true;
+      try {
+        await ElMessageBox.confirm(`确定让设备“${device.name}”立即退出？该设备的全部桌面会话会同时失效。`, '撤销桌面设备', { type: 'warning', confirmButtonText: '立即退出', cancelButtonText: '取消' });
+        await api(`/api/desktop/devices/${device.id}`, { method: 'DELETE' });
+        device.status = 'revoked';
+        message('设备已撤销，软件将在长轮询检测后立即返回登录页');
+        void loadAll({ silent: true });
+      } catch (error) {
+        if (error !== 'cancel' && error !== 'close') message(error.message || '撤销设备失败', 'error');
+      } finally { delete desktopDeviceRowLoading[id]; }
+    }
+
+    async function saveDesktopPolicy() {
+      if (desktopPolicySaving.value) return;
+      const provider = desktopPolicyForm.provider_name.trim();
+      const model = desktopPolicyForm.default_model.trim();
+      if (!provider || !model) return message('供应商名称和默认模型不能为空', 'warning');
+      desktopPolicySaving.value = true;
+      try {
+        const payload = {
+          ...desktopPolicyForm,
+		  public_api_enabled: desktopPolicyForm.external_api_mode === 'authenticated_public',
+		  official_desktop_only: desktopPolicyForm.external_api_mode === 'official_client_only',
+          provider_name: provider,
+          default_model: model,
+          allowed_models: [...new Set((desktopPolicyForm.allowed_models || []).map(item => String(item).trim()).filter(Boolean))]
+        };
+        const result = await api('/api/desktop/policy', { method: 'PUT', body: JSON.stringify(payload) });
+        applyDesktopPolicy(result);
+        message('Infinite AI 桌面策略已保存；模型与提示词在客户端下次载入时生效，访问开关立即生效');
+      } catch (error) { message(error.message || '保存桌面策略失败', 'error'); }
+      finally { desktopPolicySaving.value = false; }
     }
 
     function openInviteDialog() { inviteResult.value = null; inviteDialogVisible.value = true; }
@@ -1044,12 +1437,14 @@ createApp({
     const handleVisibilityChange = () => {
       nowSeconds.value = Math.floor(Date.now() / 1000);
       if (!document.hidden && authenticated.value) {
-        if (tab.value === 'dashboard') void refreshDashboardLive({ force: true });
-        else void loadAll({ silent: true });
+		if (tab.value === 'dashboard') void refreshDashboardLive({ force: true });
+		else if (tab.value === 'platform') void loadPlatform({ silent: true });
+		else void loadAll({ silent: true });
       }
     };
     watch(tab, value => {
       if (value === 'dashboard' && authenticated.value && !document.hidden) void refreshDashboardLive({ force: true });
+	  if (value === 'platform' && authenticated.value) void loadPlatform();
     });
     onMounted(async () => {
       applyRoute();
@@ -1057,7 +1452,7 @@ createApp({
       document.addEventListener('visibilitychange', handleVisibilityChange);
       clockTimer = window.setInterval(() => { nowSeconds.value = Math.floor(Date.now() / 1000); }, 1000);
       dashboardLiveTimer = window.setInterval(() => { void refreshDashboardLive(); }, 5000);
-      pollTimer = window.setInterval(() => { if (authenticated.value && !document.hidden && tab.value !== 'dashboard') void loadAll({ silent: true }); }, 60000);
+      pollTimer = window.setInterval(() => { if (authenticated.value && !document.hidden && tab.value !== 'dashboard') { if (tab.value === 'platform') void loadPlatform({ silent: true }); else void loadAll({ silent: true }); } }, 60000);
       try {
         const me = await api('/api/me');
         setupRequired.value = !!me.setup_required;
@@ -1079,8 +1474,11 @@ createApp({
     return {
       bootstrapped, authenticated, setupRequired, setupStage, setupLoading, setupError, setupForm, setupResult, startSetup, completeSetup,
       username, tab, systemPanel, loading, lastRefreshAt, refreshErrors, loginLoading, logoutLoading, loginError, loginForm, dashboard,
-      accounts, accountModels, modelCatalogModels, modelCatalogCount, modelAccountErrorCount, modelDialogVisible, modelRefreshing,
-      keys, invites, bans, usage, pageMeta, dashboardMetrics, resourceCards, modelRanking, quotaErrorCount, combinedLogs,
+	  accounts, accountModels, modelCatalogModels, modelCatalogCount, modelAccountErrorCount, modelDialogVisible, modelRefreshing, platform,
+	  keys, desktopUsers, desktopDevices, desktopPolicy, desktopPolicyForm, desktopPolicySaving, desktopKeyOptions,
+	  desktopUserKeyDrafts, desktopUserKeyDirty, desktopUserRowLoading, desktopDeviceRowLoading,
+	  markDesktopUserKeyDirty, saveDesktopUserKey, toggleDesktopUser, revokeDesktopDevice, saveDesktopPolicy,
+	  invites, bans, usage, pageMeta, dashboardMetrics, resourceCards, modelRanking, quotaErrorCount, combinedLogs,
 	  usagePage, logPage, recordPageSize, pagedUsage, pagedLogs,
       nowSeconds, mobileTabs, accountDialogVisible, accountMethod, oauthForm, oauth, manualAccount, manualAccountLoading,
       keyQuotaDrafts, keyQuotaDirty, keyRowLoading, inviteRowLoading, accountRowLoading, banRowLoading, markKeyQuotaDirty, isKeyQuotaDirty,
@@ -1090,7 +1488,9 @@ createApp({
       backupExportDialogVisible, backupImportDialogVisible, backupExporting, backupImporting, backupExportForm, backupImportForm,
       backupImportFile, backupImportFiles, openBackupExportDialog, resetBackupExportDialog, openBackupImportDialog, resetBackupImportDialog,
       backupFileChanged, backupFileRemoved, backupFileExceeded, exportBackup, importBackup,
-      login, logout, selectTab, loadAll, openAccountDialog, resetAccountDialog,
+	  login, logout, selectTab, loadAll, loadPlatform, createPlatformModel, publishPlatformModel, createPlatformProvider, createPlatformRoutePool, createPlatformAPIKey, togglePlatformKey, copyPlatformKey, deletePlatformKey,
+	  createPlatformUpstreamAccount, syncPlatformAccountModels, togglePlatformProvider, testPlatformProvider, deletePlatformProvider, togglePlatformUpstreamAccount, deletePlatformUpstreamAccount, addPlatformRoutePoolMember, createPlatformRouteTarget,
+	  setPlatformRegistrationMode, updatePlatformPlan, createPlatformUserInvitation, revokePlatformInvitation, deletePlatformInvitation, togglePlatformUser, revokePlatformDevice, creditPlatformWallet, createPaymentProvider, disablePaymentProvider, openAccountDialog, resetAccountDialog,
       startOpenAIOAuth, completeOpenAIOAuth, createManualAccount, refreshQuota, resetQuota, toggleAccount, deleteAccount,
       openModelDialog, refreshAccountModels,
       createInvitation, revokeInvitation, deleteInvitation, openKeyFromInvite, copyText, copyKey, saveKey, toggleKey, deleteKey, addKeyIP,

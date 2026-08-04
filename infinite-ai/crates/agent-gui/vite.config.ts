@@ -19,6 +19,14 @@ export default defineConfig(async () => ({
     __LIVEAGENT_APP_VERSION__: JSON.stringify(appVersion),
   },
 
+  // The portable Linux package ships WebKitGTK so it can run on Ubuntu
+  // 20.04 and 22.04.  Keep emitted JavaScript within that engine's parsing
+  // baseline instead of inheriting Vite's moving browser target.
+  build: {
+    target: "safari14",
+    cssTarget: "safari14",
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

@@ -13,6 +13,7 @@ use crate::runtime::task_runner::{
     build_http_client, resolve_workdir, run_single_http_request, HttpExecutionFailure,
     HttpExecutionResult, HttpRequestInput,
 };
+use crate::services::friendgate_auth::FriendGateAuthManager;
 
 use super::db::now_ms;
 use super::store::{AutomationStore, PromptQueueOutcome};
@@ -40,6 +41,7 @@ impl RunTrigger {
 
 pub struct AutomationScheduler {
     store: Arc<AutomationStore>,
+    friendgate_auth: Arc<FriendGateAuthManager>,
     scheduler: AsyncMutex<Option<JobScheduler>>,
     jobs: AsyncMutex<HashMap<String, ScheduledJob>>,
     active_runs: Mutex<HashSet<String>>,
@@ -48,9 +50,10 @@ pub struct AutomationScheduler {
 }
 
 impl AutomationScheduler {
-    pub fn new(store: Arc<AutomationStore>) -> Self {
+    pub fn new(store: Arc<AutomationStore>, friendgate_auth: Arc<FriendGateAuthManager>) -> Self {
         Self {
             store,
+            friendgate_auth,
             scheduler: AsyncMutex::new(None),
             jobs: AsyncMutex::new(HashMap::new()),
             active_runs: Mutex::new(HashSet::new()),
@@ -95,6 +98,9 @@ impl AutomationScheduler {
 
         let mut sweep = tokio::time::interval(SWEEP_INTERVAL);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut auth_check = tokio::time::interval(Duration::from_secs(1));
+        auth_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut last_authorized = self.friendgate_auth.runtime_authorized();
         loop {
             tokio::select! {
                 _ = self.reload_notify.notified() => {
@@ -114,6 +120,13 @@ impl AutomationScheduler {
                         Ok(Err(error)) => eprintln!("automation prompt sweep failed: {error}"),
                         Err(error) => eprintln!("automation prompt sweep join failed: {error}"),
                         _ => {}
+                    }
+                }
+                _ = auth_check.tick() => {
+                    let authorized = self.friendgate_auth.runtime_authorized();
+                    if authorized != last_authorized {
+                        last_authorized = authorized;
+                        self.request_reload();
                     }
                 }
             }
@@ -143,9 +156,13 @@ impl AutomationScheduler {
         self.ensure_scheduler().await?;
 
         let store = Arc::clone(&self.store);
-        let tasks = tauri::async_runtime::spawn_blocking(move || store.runnable_cron_tasks())
-            .await
-            .map_err(|e| format!("automation reload join 失败：{e}"))??;
+        let tasks = if self.friendgate_auth.runtime_authorized() {
+            tauri::async_runtime::spawn_blocking(move || store.runnable_cron_tasks())
+                .await
+                .map_err(|e| format!("automation reload join 失败：{e}"))??
+        } else {
+            Vec::new()
+        };
 
         let desired: HashMap<String, CronTask> = tasks
             .into_iter()
@@ -252,6 +269,9 @@ impl AutomationScheduler {
     }
 
     async fn fire(self: &Arc<Self>, task_id: String) {
+        if !self.friendgate_auth.runtime_authorized() {
+            return;
+        }
         let fresh = {
             let store = Arc::clone(&self.store);
             let task_id = task_id.clone();

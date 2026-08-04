@@ -20,7 +20,7 @@ usage() {
 [[ $# -ge 2 && $# -le 3 ]] || usage
 source_appimage="$(realpath "$1")"
 output_deb="$(realpath -m "$2")"
-version="${3:-1.3.0-dev.0}"
+version="${3:-2.0.0}"
 
 for command_name in dpkg-deb mktemp patchelf realpath cp find install readelf; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -98,10 +98,15 @@ done
 # interpreter (and the real Rust executable) keeps that lookup intact while
 # forcing both processes to use the private loader and libc.
 interpreter="/opt/infinite-ai/app/usr/lib/infinite-ai-runtime/ld-linux-x86-64.so.2"
-patchelf --set-interpreter "$interpreter" "$runtime_root/app/AppRun.wrapped"
-patchelf --set-interpreter "$interpreter" "$runtime_root/app/usr/bin/infinite-ai"
-patchelf --force-rpath --set-rpath "/opt/infinite-ai/app/usr/lib/infinite-ai-runtime:/opt/infinite-ai/app/usr/lib:/opt/infinite-ai/app/usr/lib/x86_64-linux-gnu" \
-  "$runtime_root/app/AppRun.wrapped" "$runtime_root/app/usr/bin/infinite-ai"
+for executable in \
+  "$runtime_root/app/AppRun.wrapped" \
+  "$runtime_root/app/usr/bin/infinite-ai"; do
+  patchelf --set-interpreter "$interpreter" "$executable"
+  # Ubuntu 20.04 ships patchelf 0.10 and some build hosts still carry 0.8.
+  # Those versions only reliably patch one input at a time, so never pass
+  # both application entry points to a single invocation.
+  patchelf --force-rpath --set-rpath "/opt/infinite-ai/app/usr/lib/infinite-ai-runtime:/opt/infinite-ai/app/usr/lib:/opt/infinite-ai/app/usr/lib/x86_64-linux-gnu" "$executable"
+done
 
 # WebKitGTK launches these helpers as separate processes. Patch their
 # interpreters too; otherwise they would inherit Ubuntu 20.04's loader and
@@ -110,8 +115,17 @@ while IFS= read -r -d '' executable; do
   if readelf -l "$executable" 2>/dev/null | grep -q 'Requesting program interpreter'; then
     patchelf --set-interpreter "$interpreter" "$executable"
     patchelf --force-rpath --set-rpath "/opt/infinite-ai/app/usr/lib/infinite-ai-runtime:/opt/infinite-ai/app/usr/lib:/opt/infinite-ai/app/usr/lib/x86_64-linux-gnu" "$executable"
+    chmod 0755 "$executable"
   fi
 done < <(find "$runtime_root/app/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1" -type f -perm -0100 -print0 2>/dev/null)
+
+# AppImage contents keep the build user's ownership/mode. Once dpkg changes
+# ownership to root, group-only execute bits would make the desktop app
+# impossible to launch as a normal user.
+chmod 0755 \
+  "$runtime_root/app/AppRun" \
+  "$runtime_root/app/AppRun.wrapped" \
+  "$runtime_root/app/usr/bin/infinite-ai"
 
 # The WebKit shared objects themselves use an `$ORIGIN` RUNPATH. Add a
 # transitive RPATH to every bundled shared object so glibc/libm/libstdc++ are
@@ -140,6 +154,44 @@ export APPDIR="$app_root"
 exec "$app_root/AppRun.wrapped" "$@"
 EOF
 
+# Install first-class desktop integration outside the private AppDir.  A DEB
+# that only contains /usr/bin/infinite-ai can be launched from a terminal but
+# is invisible in GNOME/KDE application menus and may show a generic icon.
+desktop_dir="$package_root/usr/share/applications"
+icon_root="$package_root/usr/share/icons/hicolor"
+install -d \
+  "$desktop_dir" \
+  "$icon_root/32x32/apps" \
+  "$icon_root/128x128/apps" \
+  "$icon_root/256x256/apps" \
+  "$icon_root/512x512/apps" \
+  "$package_root/usr/share/pixmaps"
+
+cat >"$desktop_dir/infinite-ai.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Infinite AI
+Comment=Infinite AI 专属智能开发环境
+Exec=infinite-ai %U
+Icon=infinite-ai
+Terminal=false
+Categories=Development;IDE;
+StartupNotify=true
+StartupWMClass=infinite-ai
+Keywords=AI;IDE;Code;Infinite;
+EOF
+
+install -m 0644 "$runtime_root/app/usr/share/icons/hicolor/32x32/apps/infinite-ai.png" \
+  "$icon_root/32x32/apps/infinite-ai.png"
+install -m 0644 "$runtime_root/app/usr/share/icons/hicolor/128x128/apps/infinite-ai.png" \
+  "$icon_root/128x128/apps/infinite-ai.png"
+install -m 0644 "$runtime_root/app/usr/share/icons/hicolor/256x256@2/apps/infinite-ai.png" \
+  "$icon_root/256x256/apps/infinite-ai.png"
+install -m 0644 "$runtime_root/app/usr/share/icons/hicolor/512x512/apps/infinite-ai.png" \
+  "$icon_root/512x512/apps/infinite-ai.png"
+install -m 0644 "$runtime_root/app/usr/share/icons/hicolor/512x512/apps/infinite-ai.png" \
+  "$package_root/usr/share/pixmaps/infinite-ai.png"
+
 control_dir="$package_root/DEBIAN"
 install -d "$control_dir"
 cat >"$control_dir/control" <<EOF
@@ -156,7 +208,17 @@ EOF
 cat >"$control_dir/postinst" <<'EOF'
 #!/bin/sh
 set -eu
-chmod 0755 /usr/bin/infinite-ai /opt/infinite-ai/app/AppRun 2>/dev/null || true
+chmod 0755 \
+  /usr/bin/infinite-ai \
+  /opt/infinite-ai/app/AppRun \
+  /opt/infinite-ai/app/AppRun.wrapped \
+  /opt/infinite-ai/app/usr/bin/infinite-ai 2>/dev/null || true
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
 exit 0
 EOF
 chmod 0755 "$control_dir/postinst"

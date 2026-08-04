@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { revealItemInDirectory } from "../../../lib/desktopOpener";
 import {
   type Dispatch,
   type MutableRefObject,
@@ -335,7 +335,7 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
       }
 
       try {
-        await revealItemInDir(project.path.trim());
+        await revealItemInDirectory(project.path.trim());
       } catch (error) {
         setErrorMessage(asErrorMessage(error, t("chat.workspaceOpenSystemFileManagerFailed")));
       }

@@ -2,7 +2,6 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   type ComponentProps,
   cloneElement,
@@ -26,6 +25,7 @@ import {
 } from "streamdown";
 import { useLocale } from "../i18n";
 import { normalizeLatexDelimiters } from "../lib/normalizeLatexDelimiters";
+import { openExternalUrl } from "../lib/desktopOpener";
 import { cn } from "../lib/shared/utils";
 import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, X } from "./icons";
 import { Button } from "./ui/button";
@@ -309,7 +309,7 @@ export function ExternalLinkModal({ isOpen, onClose, onConfirm, url }: LinkSafet
 
   const handleOpenLink = async () => {
     try {
-      await openUrl(url);
+      await openExternalUrl(url);
     } catch (error) {
       console.error("Failed to open external link via opener", error);
       onConfirm();

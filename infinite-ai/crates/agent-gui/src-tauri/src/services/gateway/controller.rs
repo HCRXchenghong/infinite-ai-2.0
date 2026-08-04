@@ -32,6 +32,7 @@ impl GatewayController {
         sftp_registry: Arc<SftpSessionRegistry>,
         managed_process_registry: Arc<ManagedProcessRegistry>,
         git_clone_task_registry: Arc<GitCloneTaskRegistry>,
+        friendgate_auth: Arc<crate::services::friendgate_auth::FriendGateAuthManager>,
     ) -> Self {
         let initial_config = RemoteSettingsPayload::default();
         let (config_tx, _) = watch::channel(initial_config);
@@ -40,6 +41,7 @@ impl GatewayController {
         Self {
             app_handle,
             automation_store,
+            friendgate_auth,
             memory_store,
             provider_usage_service,
             terminal_registry,

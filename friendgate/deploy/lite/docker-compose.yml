@@ -1,6 +1,43 @@
 name: friendgate
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: infinite-ai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-infinite_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-infinite_ai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: --data-checksums
+    # Conservative defaults for a 1-core / 2-GiB host. The application uses
+    # transactional quotas, so durability is retained; only cache sizes are
+    # deliberately small.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-64MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-192MB}
+      - -c
+      - work_mem=${POSTGRES_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-32MB}
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-32}
+    volumes:
+      - infinite_ai_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-320m}
+    cpus: ${POSTGRES_CPU_LIMIT:-0.75}
+    security_opt:
+      - no-new-privileges:true
+
   friendgate:
     image: ${FRIENDGATE_IMAGE:-friendgate:local}
     build:
@@ -12,6 +49,9 @@ services:
     container_name: friendgate
     restart: unless-stopped
     init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
     # The application may spend up to 15 seconds draining live streams.
     stop_grace_period: ${STOP_GRACE_PERIOD:-30s}
     read_only: true
@@ -38,25 +78,39 @@ services:
       - "${ADMIN_PORT:-8081}:8081"
       - "${INVITE_PORT:-8082}:8082"
       - "${GUIDE_PORT:-8083}:8083"
+      - "${PORTAL_PORT:-8084}:8084"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       LITE_DATA_DIR: /data
+      # PostgreSQL is the authority for users, products, model routes,
+      # subscriptions, wallets and audit data. Existing gateway credentials are
+      # imported only by the explicit migration workflow, never at container
+      # startup.
+      LITE_DATABASE_URL: ${LITE_DATABASE_URL:?LITE_DATABASE_URL is required}
+      LITE_DATABASE_MAX_OPEN: ${LITE_DATABASE_MAX_OPEN:-8}
+      LITE_DATABASE_MAX_IDLE: ${LITE_DATABASE_MAX_IDLE:-4}
+      LITE_DATABASE_MAX_LIFETIME: ${LITE_DATABASE_MAX_LIFETIME:-30m}
       LITE_ADMIN_USERNAME: ${LITE_ADMIN_USERNAME:-admin}
       LITE_ADMIN_PASSWORD: ${LITE_ADMIN_PASSWORD:?LITE_ADMIN_PASSWORD is required}
       LITE_MASTER_KEY: ${LITE_MASTER_KEY:?LITE_MASTER_KEY is required}
       LITE_PUBLIC_API_URL: ${LITE_PUBLIC_API_URL:?LITE_PUBLIC_API_URL is required}
       LITE_PUBLIC_INVITE_URL: ${LITE_PUBLIC_INVITE_URL:?LITE_PUBLIC_INVITE_URL is required}
       LITE_PUBLIC_GUIDE_URL: ${LITE_PUBLIC_GUIDE_URL:?LITE_PUBLIC_GUIDE_URL is required}
+      LITE_PUBLIC_PORTAL_URL: ${LITE_PUBLIC_PORTAL_URL:?LITE_PUBLIC_PORTAL_URL is required}
       LITE_PUBLIC_IPV4_PROBE_URL: ${LITE_PUBLIC_IPV4_PROBE_URL:-}
       LITE_PUBLIC_IPV6_PROBE_URL: ${LITE_PUBLIC_IPV6_PROBE_URL:-}
       LITE_UPSTREAM_BASE_URL: ${LITE_UPSTREAM_BASE_URL:-https://chatgpt.com/backend-api/codex}
-      LITE_SECURE_COOKIES: ${LITE_SECURE_COOKIES:-false}
+      LITE_SECURE_COOKIES: ${LITE_SECURE_COOKIES:-true}
       LITE_TRUSTED_PROXIES: ${LITE_TRUSTED_PROXIES:-}
       LITE_BAN_THRESHOLD: ${LITE_BAN_THRESHOLD:-20}
       LITE_BAN_WINDOW: ${LITE_BAN_WINDOW:-1m}
       LITE_BAN_DURATION: ${LITE_BAN_DURATION:-24h}
       LITE_INVITE_TTL: ${LITE_INVITE_TTL:-168h}
       LITE_ADMIN_SESSION_TTL: ${LITE_ADMIN_SESSION_TTL:-12h}
+      LITE_USER_SESSION_TTL: ${LITE_USER_SESSION_TTL:-168h}
+      LITE_DESKTOP_FLOW_TTL: ${LITE_DESKTOP_FLOW_TTL:-10m}
+      LITE_DESKTOP_ACCESS_TTL: ${LITE_DESKTOP_ACCESS_TTL:-15m}
+      LITE_DESKTOP_REFRESH_TTL: ${LITE_DESKTOP_REFRESH_TTL:-720h}
       LITE_STICKY_SESSION_TTL: ${LITE_STICKY_SESSION_TTL:-1h}
       LITE_ACCOUNT_COOLDOWN: ${LITE_ACCOUNT_COOLDOWN:-5m}
       LITE_QUOTA_BASE_URL: ${LITE_QUOTA_BASE_URL:-https://chatgpt.com/backend-api/wham}
@@ -72,3 +126,4 @@ services:
 
 volumes:
   friendgate_data:
+  infinite_ai_postgres:

@@ -58,6 +58,27 @@ export LC_CTYPE="${LC_CTYPE:-${LANG:-C.UTF-8}}"\
 ' "$app_dir/AppRun"
 grep -q 'GTK_IM_MODULE' "$app_dir/AppRun" || fail "failed to configure Linux input method environment"
 
+# linuxdeploy discovers WebKitGTK's shared libraries through LD_LIBRARY_PATH,
+# but it can still omit the helper executables that WebKit launches after the
+# main window is created.  A package without these files starts and then
+# immediately aborts with "Unable to spawn WebKitNetworkProcess".  Copy the
+# helpers explicitly and fail the build if the build host/sysroot cannot
+# provide them.
+webkit_helpers_source="${WEBKIT_HELPERS_DIR:-/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1}"
+webkit_helpers_target="$app_dir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+install -d "$webkit_helpers_target"
+for helper_name in WebKitGPUProcess WebKitNetworkProcess WebKitWebProcess; do
+  helper_source="$webkit_helpers_source/$helper_name"
+  test -x "$helper_source" || fail "missing WebKitGTK helper: $helper_source"
+  install -m 0755 "$helper_source" "$webkit_helpers_target/$helper_name"
+done
+if [ -f "$webkit_helpers_source/injected-bundle/libwebkit2gtkinjectedbundle.so" ]; then
+  install -d "$webkit_helpers_target/injected-bundle"
+  install -m 0644 \
+    "$webkit_helpers_source/injected-bundle/libwebkit2gtkinjectedbundle.so" \
+    "$webkit_helpers_target/injected-bundle/libwebkit2gtkinjectedbundle.so"
+fi
+
 mapfile -d '' bundled_wayland_libraries < <(
   find "$app_dir/usr/lib" \( -type f -o -type l \) \
     -name 'libwayland-*.so*' -print0

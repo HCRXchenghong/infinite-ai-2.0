@@ -321,5 +321,5 @@ test("fs tool descriptions keep Image as the only display path for images", () =
     source,
     /The structured, tracked way to intentionally delete a workspace or enabled Skill file\/directory/,
   );
-  assert.match(source, /Delete results feed LiveAgent's Edited Files and file-ledger tracking/);
+  assert.match(source, /Delete results feed Infinite AI's Edited Files and file-ledger tracking/);
 });

@@ -6,10 +6,12 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -29,6 +31,7 @@ func testApp(t *testing.T) (*Server, *Store) {
 		AdminUsername: "admin", AdminPassword: "correct-horse-battery-staple",
 		MasterKey: key, BanThreshold: 3, BanWindow: time.Minute, BanDuration: time.Hour,
 		MaxBodyBytes: 4 << 20, RevealTTL: time.Minute, StickyTTL: time.Hour, AccountCooldown: 5 * time.Minute,
+		UserSessionTTL: 24 * time.Hour, DesktopFlowTTL: 10 * time.Minute, DesktopAccessTTL: 15 * time.Minute, DesktopRefreshTTL: 30 * 24 * time.Hour,
 		UpstreamBaseURL: "https://chatgpt.invalid/backend-api/codex",
 	}
 	store, err := OpenStore(cfg, vault)
@@ -91,6 +94,41 @@ func TestVaultAndPasswordHash(t *testing.T) {
 	}
 	if !passwordVerify(hash, "six-characters") || passwordVerify(hash, "wrong-password") {
 		t.Fatal("password verification mismatch")
+	}
+}
+
+func TestOpenStoreSecuresDatabaseAndJournalFiles(t *testing.T) {
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "friendgate.db")
+	if err := os.WriteFile(databasePath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(databasePath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := bytes.Repeat([]byte{0x24}, 32)
+	vault, err := NewVault(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(Config{DatabasePath: databasePath, AdminUsername: "admin", AdminPassword: "test-bootstrap-password"}, vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		path := databasePath + suffix
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if permissions := info.Mode().Perm(); permissions != 0o600 {
+			t.Fatalf("%s permissions=%#o, want 0600", filepath.Base(path), permissions)
+		}
 	}
 }
 

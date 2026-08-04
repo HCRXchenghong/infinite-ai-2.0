@@ -3,14 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" href="/brand-logo.png" />
     <link rel="apple-touch-icon" href="/brand-logo.png" />
     <title>Infinite AI</title>
+    <script>
+      (() => {
+        const showBootError = (value) => {
+          const message = String(value || "未知前端错误");
+          const output = document.getElementById("boot-status");
+          if (!output) return;
+          output.textContent = `Infinite AI 启动失败：${message}`;
+          output.style.color = "#a63d40";
+          document.title = `Infinite AI 启动失败：${message}`;
+        };
+        window.addEventListener("error", (event) => showBootError(event.message));
+        window.addEventListener("unhandledrejection", (event) =>
+          showBootError(event.reason instanceof Error ? event.reason.message : event.reason),
+        );
+      })();
+    </script>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot-status" style="display:flex;height:100vh;align-items:center;justify-content:center;background:#fafafa;color:#666666;font:14px system-ui,sans-serif">正在安全启动 Infinite AI…</div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

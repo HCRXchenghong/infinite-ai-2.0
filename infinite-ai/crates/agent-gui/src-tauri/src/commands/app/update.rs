@@ -625,7 +625,8 @@ mod tests {
                 tag_name: "v0.1.2".to_string(),
                 title: Some("Infinite AI v0.1.2".to_string()),
                 html_url: Some(
-                    "https://github.com/HCRXchenghong/infinite-ai-2.0/releases/tag/v0.1.2".to_string()
+                    "https://github.com/HCRXchenghong/infinite-ai-2.0/releases/tag/v0.1.2"
+                        .to_string()
                 ),
                 updated: Some("2026-05-25T16:00:34Z".to_string()),
             }]

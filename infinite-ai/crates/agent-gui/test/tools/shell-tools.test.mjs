@@ -58,7 +58,7 @@ test("Bash tool keeps one Bash entry and uses Git Bash-first policy for Claude C
   const managedProcess = bundle.tools.find((tool) => tool.name === "ManagedProcess");
   assert.ok(managedProcess);
   assert.match(managedProcess.description, /never use it to intentionally delete workspace/);
-  assert.match(managedProcess.description, /use Delete so LiveAgent can track the deletion/);
+  assert.match(managedProcess.description, /use Delete so Infinite AI can track the deletion/);
   assert.doesNotMatch(bundle.tools[0].description, /native Windows shell chain/);
 
   const result = await bundle.executeToolCall(createBashCall());

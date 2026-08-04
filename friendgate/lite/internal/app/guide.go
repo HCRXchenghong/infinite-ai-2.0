@@ -129,7 +129,7 @@ func (s *Server) guideModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) guideAuthKey(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
-		s.guideAuthFailure(w, r, "origin_rejected")
+		writeError(w, http.StatusForbidden, "origin_rejected", "请求来源不受信任")
 		return
 	}
 	var body struct {
@@ -153,7 +153,7 @@ func (s *Server) guideAuthKey(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) guideAuthImage(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
-		s.guideAuthFailure(w, r, "origin_rejected")
+		writeError(w, http.StatusForbidden, "origin_rejected", "请求来源不受信任")
 		return
 	}
 	if r.ContentLength > 8<<20 {
@@ -236,6 +236,10 @@ func (s *Server) currentGuideSession(r *http.Request) (guideSession, *APIKey, bo
 }
 
 func (s *Server) guideLogout(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "origin_rejected", "请求来源不受信任")
+		return
+	}
 	// Clear-Site-Data is intentionally limited to cache/storage here. Cookies
 	// are not port-scoped, so a host-wide "cookies" directive on the guide
 	// listener could also remove the separate administrator cookie. The named
@@ -321,7 +325,9 @@ func decodeGuideMarker(data []byte) (guideMarker, error) {
 				return nil, errors.New("marker is truncated")
 			}
 			r, g, b, _ := img.At(x, y).RGBA()
-			bits = append(bits, byte(r>>8)&1, byte(g>>8)&1, byte(b>>8)&1)
+			// Mask before narrowing: only the least-significant marker bit is
+			// retained, so no high colour bits can be truncated into the result.
+			bits = append(bits, byte((r>>8)&1), byte((g>>8)&1), byte((b>>8)&1))
 		}
 		result := make([]byte, count)
 		for i := range result {

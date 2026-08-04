@@ -11,6 +11,7 @@ API_PUBLISHED_PORT="${API_PORT:-8080}"
 ADMIN_PUBLISHED_PORT="${ADMIN_PORT:-8081}"
 INVITE_PUBLISHED_PORT="${INVITE_PORT:-8082}"
 GUIDE_PUBLISHED_PORT="${GUIDE_PORT:-8083}"
+PORTAL_PUBLISHED_PORT="${PORTAL_PORT:-8084}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "请使用 root 运行：sudo bash deploy/lite/install.sh" >&2
@@ -28,8 +29,9 @@ validate_port API_PORT "${API_PUBLISHED_PORT}"
 validate_port ADMIN_PORT "${ADMIN_PUBLISHED_PORT}"
 validate_port INVITE_PORT "${INVITE_PUBLISHED_PORT}"
 validate_port GUIDE_PORT "${GUIDE_PUBLISHED_PORT}"
-if [ "${API_PUBLISHED_PORT}" = "${ADMIN_PUBLISHED_PORT}" ] || [ "${API_PUBLISHED_PORT}" = "${INVITE_PUBLISHED_PORT}" ] || [ "${API_PUBLISHED_PORT}" = "${GUIDE_PUBLISHED_PORT}" ] || [ "${ADMIN_PUBLISHED_PORT}" = "${INVITE_PUBLISHED_PORT}" ] || [ "${ADMIN_PUBLISHED_PORT}" = "${GUIDE_PUBLISHED_PORT}" ] || [ "${INVITE_PUBLISHED_PORT}" = "${GUIDE_PUBLISHED_PORT}" ]; then
-  echo "API_PORT、ADMIN_PORT、INVITE_PORT 和 GUIDE_PORT 必须使用四个不同端口" >&2
+validate_port PORTAL_PORT "${PORTAL_PUBLISHED_PORT}"
+if [ "$(printf '%s\n' "${API_PUBLISHED_PORT}" "${ADMIN_PUBLISHED_PORT}" "${INVITE_PUBLISHED_PORT}" "${GUIDE_PUBLISHED_PORT}" "${PORTAL_PUBLISHED_PORT}" | sort -u | wc -l)" -ne 5 ]; then
+  echo "API_PORT、ADMIN_PORT、INVITE_PORT、GUIDE_PORT 和 PORTAL_PORT 必须使用五个不同端口" >&2
   exit 1
 fi
 
@@ -144,6 +146,7 @@ PUBLIC_URL_HOST="$(format_url_host "${PUBLIC_HOST}")"
 PUBLIC_API_URL="${LITE_PUBLIC_API_URL:-http://${PUBLIC_URL_HOST}:${API_PUBLISHED_PORT}/v1}"
 PUBLIC_INVITE_URL="${LITE_PUBLIC_INVITE_URL:-http://${PUBLIC_URL_HOST}:${INVITE_PUBLISHED_PORT}}"
 PUBLIC_GUIDE_URL="${LITE_PUBLIC_GUIDE_URL:-http://${PUBLIC_URL_HOST}:${GUIDE_PUBLISHED_PORT}}"
+PUBLIC_PORTAL_URL="${LITE_PUBLIC_PORTAL_URL:-http://${PUBLIC_URL_HOST}:${PORTAL_PUBLISHED_PORT}}"
 
 ENV_FILE="${INSTALL_DIR}/deploy/lite/.env"
 HOST_NGINX_AVAILABLE=false
@@ -161,6 +164,7 @@ if [ ! -f "${ENV_FILE}" ]; then
     printf 'LITE_PUBLIC_API_URL=%s\n' "${PUBLIC_API_URL}"
     printf 'LITE_PUBLIC_INVITE_URL=%s\n' "${PUBLIC_INVITE_URL}"
     printf 'LITE_PUBLIC_GUIDE_URL=%s\n' "${PUBLIC_GUIDE_URL}"
+    printf 'LITE_PUBLIC_PORTAL_URL=%s\n' "${PUBLIC_PORTAL_URL}"
     printf 'LITE_UPSTREAM_BASE_URL=%s\n' "${LITE_UPSTREAM_BASE_URL:-https://chatgpt.com/backend-api/codex}"
     if [ -n "${PUBLIC_IPV4_HOST}" ]; then
       printf 'LITE_PUBLIC_IPV4_PROBE_URL=http://%s:%s\n' "${PUBLIC_IPV4_HOST}" "${INVITE_PUBLISHED_PORT}"
@@ -172,12 +176,16 @@ if [ ! -f "${ENV_FILE}" ]; then
     else
       printf 'LITE_PUBLIC_IPV6_PROBE_URL=\n'
     fi
-    printf 'LITE_SECURE_COOKIES=%s\n' "${LITE_SECURE_COOKIES:-false}"
+    printf 'LITE_SECURE_COOKIES=%s\n' "${LITE_SECURE_COOKIES:-true}"
     printf 'LITE_BAN_THRESHOLD=%s\n' "${LITE_BAN_THRESHOLD:-20}"
     printf 'LITE_BAN_WINDOW=%s\n' "${LITE_BAN_WINDOW:-1m}"
     printf 'LITE_BAN_DURATION=%s\n' "${LITE_BAN_DURATION:-24h}"
     printf 'LITE_INVITE_TTL=%s\n' "${LITE_INVITE_TTL:-168h}"
     printf 'LITE_ADMIN_SESSION_TTL=%s\n' "${LITE_ADMIN_SESSION_TTL:-12h}"
+    printf 'LITE_USER_SESSION_TTL=%s\n' "${LITE_USER_SESSION_TTL:-168h}"
+    printf 'LITE_DESKTOP_FLOW_TTL=%s\n' "${LITE_DESKTOP_FLOW_TTL:-10m}"
+    printf 'LITE_DESKTOP_ACCESS_TTL=%s\n' "${LITE_DESKTOP_ACCESS_TTL:-15m}"
+    printf 'LITE_DESKTOP_REFRESH_TTL=%s\n' "${LITE_DESKTOP_REFRESH_TTL:-720h}"
     printf 'LITE_STICKY_SESSION_TTL=%s\n' "${LITE_STICKY_SESSION_TTL:-1h}"
     printf 'LITE_ACCOUNT_COOLDOWN=%s\n' "${LITE_ACCOUNT_COOLDOWN:-5m}"
     printf 'LITE_QUOTA_BASE_URL=%s\n' "${LITE_QUOTA_BASE_URL:-https://chatgpt.com/backend-api/wham}"
@@ -187,6 +195,7 @@ if [ ! -f "${ENV_FILE}" ]; then
     printf 'ADMIN_PORT=%s\n' "${ADMIN_PUBLISHED_PORT}"
     printf 'INVITE_PORT=%s\n' "${INVITE_PUBLISHED_PORT}"
     printf 'GUIDE_PORT=%s\n' "${GUIDE_PUBLISHED_PORT}"
+    printf 'PORTAL_PORT=%s\n' "${PORTAL_PUBLISHED_PORT}"
     if [ -n "${RELEASE_IMAGE}" ]; then
       printf 'FRIENDGATE_IMAGE=%s\n' "${RELEASE_IMAGE}"
     fi
@@ -229,6 +238,7 @@ echo "API:    $(sed -n 's/^LITE_PUBLIC_API_URL=//p' .env)"
 echo "后台:   http://${PUBLIC_URL_HOST}:${ADMIN_PORT_VALUE}"
 echo "邀请端: $(sed -n 's/^LITE_PUBLIC_INVITE_URL=//p' .env)"
 echo "配置指南: $(sed -n 's/^LITE_PUBLIC_GUIDE_URL=//p' .env)"
+echo "用户登录: $(sed -n 's/^LITE_PUBLIC_PORTAL_URL=//p' .env)"
 if [ "${HOST_NGINX_AVAILABLE}" = true ]; then
   echo "Nginx:  已从 /etc/nginx 只读挂载，可在后台确认基线"
 else
@@ -238,4 +248,4 @@ echo "初始化账号: $(sed -n 's/^LITE_ADMIN_USERNAME=//p' .env)"
 echo "初始化口令: ${ADMIN_PASSWORD_VALUE}"
 echo
 echo "首次打开后台后，请创建最终管理员密码并扫描 Microsoft Authenticator 二维码。"
-echo "初始化完成后创建入口会永久关闭。请同时配置防火墙，并在正式使用前为四个入口配置 HTTPS。"
+echo "初始化完成后创建入口会永久关闭。请同时配置防火墙，并在正式使用前为五个入口配置 HTTPS。"

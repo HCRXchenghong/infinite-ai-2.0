@@ -94,7 +94,7 @@ export function ChatEmptyState({
             alt=""
             aria-hidden="true"
             draggable={false}
-            className="relative h-12 w-12 select-none object-contain"
+            className="relative h-12 w-12 select-none object-contain dark:invert"
           />
         </div>
       </div>

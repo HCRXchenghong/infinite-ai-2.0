@@ -26,6 +26,7 @@ use crate::runtime::sftp::SftpSessionRegistry;
 use crate::runtime::terminal::TerminalSessionRegistry;
 use crate::services::automation::AutomationStore;
 use crate::services::chat_run_ledger::ChatRunLedger;
+use crate::services::friendgate_auth::FriendGateAuthManager;
 use crate::services::memory::MemoryStore;
 use crate::services::provider_usage::ProviderUsageService;
 use crate::services::tunnel::{TunnelProxy, TunnelStore};
@@ -119,6 +120,7 @@ pub(crate) const GATEWAY_CONNECTION_NUDGE_COOLDOWN: Duration = Duration::from_se
 pub struct GatewayController {
     app_handle: tauri::AppHandle,
     automation_store: Arc<AutomationStore>,
+    pub(crate) friendgate_auth: Arc<FriendGateAuthManager>,
     memory_store: Arc<MemoryStore>,
     provider_usage_service: Arc<ProviderUsageService>,
     terminal_registry: Arc<TerminalSessionRegistry>,

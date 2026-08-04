@@ -79,10 +79,10 @@ test("each query mode keeps its own script and empty modes show their preset", (
   // 一比一复刻 cc-switch:custom 空骨架、general 带 UA + isValid、newapi 带 UA。
   assert.ok(customPreset.includes('url: ""'));
   assert.ok(generalPreset.includes("{{baseUrl}}/user/balance"));
-  assert.ok(generalPreset.includes('"User-Agent": "LiveAgent/1.0"'));
+  assert.ok(generalPreset.includes('"User-Agent": "Infinite AI/1.0"'));
   assert.ok(generalPreset.includes("isValid: response.is_active || true"));
   assert.ok(newapiPreset.includes("{{baseUrl}}/api/user/self"));
-  assert.ok(newapiPreset.includes('"User-Agent": "LiveAgent/1.0"'));
+  assert.ok(newapiPreset.includes('"User-Agent": "Infinite AI/1.0"'));
 
   // 没填写过的模式显示各自的模板预设(custom 为空骨架)。
   const filled = forms.applyUsageQueryModePreset({ ...usageQuery, script: "" }, "general");

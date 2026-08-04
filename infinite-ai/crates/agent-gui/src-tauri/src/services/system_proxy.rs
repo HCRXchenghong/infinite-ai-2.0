@@ -112,6 +112,7 @@ struct CachedAsyncClient {
 struct SystemProxyState {
     snapshot: RwLock<ProxySnapshot>,
     async_client: RwLock<Option<CachedAsyncClient>>,
+    no_redirect_client: RwLock<Option<CachedAsyncClient>>,
 }
 
 fn state() -> &'static SystemProxyState {
@@ -122,6 +123,7 @@ fn state() -> &'static SystemProxyState {
             mode: ProxyMode::Disabled,
         }),
         async_client: RwLock::new(None),
+        no_redirect_client: RwLock::new(None),
     })
 }
 
@@ -168,6 +170,10 @@ pub fn set_config(raw: Option<&Value>) {
     drop(snapshot);
     *state()
         .async_client
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *state()
+        .no_redirect_client
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
@@ -268,6 +274,39 @@ pub fn cached_client() -> Result<reqwest::Client, String> {
     if current_revision == snapshot.revision {
         *state()
             .async_client
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CachedAsyncClient {
+            revision: snapshot.revision,
+            client: client.clone(),
+        });
+    }
+    Ok(client)
+}
+
+/// 图片反代专用客户端。禁止 reqwest 自动跟随重定向，确保每一跳都能在
+/// 图片代理层重新做公网地址校验，防止跳转到环回或私网地址。
+pub fn cached_no_redirect_client() -> Result<reqwest::Client, String> {
+    let snapshot = current_snapshot();
+    {
+        let cached = state()
+            .no_redirect_client
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(cached) = cached
+            .as_ref()
+            .filter(|client| client.revision == snapshot.revision)
+        {
+            return Ok(cached.client.clone());
+        }
+    }
+    let client = async_client_builder_for_mode(&snapshot.mode)?
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "创建应用代理 HTTP 客户端失败".to_string())?;
+    let current_revision = current_snapshot().revision;
+    if current_revision == snapshot.revision {
+        *state()
+            .no_redirect_client
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CachedAsyncClient {
             revision: snapshot.revision,

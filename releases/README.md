@@ -10,10 +10,10 @@
 
 ## Infinite AI Linux 包
 
-`linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb` 是当前 Infinite AI 的便携 Debian 包，目标是 Ubuntu 20.04 和 22.04 x86_64。它把 WebKitGTK 运行时放在应用目录中，包本身没有 `libwebkit2gtk-4.1` 依赖，因此在两套系统上都可以直接执行 `dpkg -i`：
+`linux/Infinite-AI-2.0.0-ubuntu20.04-22.04-amd64.deb` 是当前 Infinite AI 2.0 的便携 Debian 包，目标是 Ubuntu 20.04 和 22.04 x86_64。它把 WebKitGTK 运行时放在应用目录中，包本身没有 `libwebkit2gtk-4.1` 依赖，因此在两套系统上都可以直接执行 `dpkg -i`：
 
 ```bash
-sudo dpkg -i Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb
+sudo dpkg -i Infinite-AI-2.0.0-ubuntu20.04-22.04-amd64.deb
 ```
 
 安装器保留主机的 X11/Wayland/Mesa 驱动选择，适合带桌面环境的 Ubuntu。安装后从应用菜单启动，或运行 `infinite-ai`；中文输入会自动使用 IBus/XIM 回退。该包仅提供 amd64 架构，服务器没有图形桌面时请使用网关服务而不是桌面端。
@@ -21,7 +21,8 @@ sudo dpkg -i Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb
 SHA-256：
 
 ```text
-6a7f560555c4a98e120f3d710dd56ecbe3a3d6f16dbe14fb8cae461440bf0fe2  linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb
+4b30e31977655d3f73dff6555acee4a42a5d1616b34b10a34a4e6836f0f559f2  linux/Infinite-AI-2.0.0-ubuntu20.04-22.04-amd64.deb
+28c1768b5da066b09f3dfe06226dd228a69408c712b2c9cadd3e91aa9023b4da  linux/Infinite-AI-2.0.0-x86_64.AppImage
 ```
 
 如果选择标准 Tauri `.deb`，它只适用于 Ubuntu 22.04 及更新系统；20.04 请使用上面的便携包。

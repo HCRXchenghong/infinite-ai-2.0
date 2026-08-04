@@ -3,8 +3,12 @@ liveagent-runtime/
 # Linux AppImages exceed GitHub's regular 100 MiB blob limit. Keep locally
 # for testing; publish them through GitHub Releases or an artifact store.
 releases/linux/*.AppImage
+releases/linux/Infinite-AI-2*.deb
+infinite-ai/releases/
 releases/**/*.part
 releases/**/*.tmp
+infinite-ai/target-docker/
+reference-infinite-ai/
 
 # 常见构建产物
 **/node_modules/

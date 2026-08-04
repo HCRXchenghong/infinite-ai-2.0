@@ -1672,10 +1672,10 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                 alt=""
                 aria-hidden="true"
                 draggable={false}
-                className="h-8 w-8 shrink-0 select-none rounded-xl object-contain"
+                className="h-8 w-8 shrink-0 select-none object-contain dark:invert"
               />
               <div className="min-w-0">
-                <div className="truncate font-semibold tracking-tight">Live Agent</div>
+                <div className="truncate font-semibold tracking-tight">Infinite AI</div>
               </div>
             </div>
 

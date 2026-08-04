@@ -686,7 +686,10 @@ mod tests {
     #[test]
     fn compose_status_line_appends_suffix_only_when_non_empty() {
         assert_eq!(compose_status_line("1.3.0", None), "Infinite AI 1.3.0");
-        assert_eq!(compose_status_line("1.3.0", Some("  ")), "Infinite AI 1.3.0");
+        assert_eq!(
+            compose_status_line("1.3.0", Some("  ")),
+            "Infinite AI 1.3.0"
+        );
         assert_eq!(
             compose_status_line("1.3.0", Some("远程已连接")),
             "Infinite AI 1.3.0 · 远程已连接"

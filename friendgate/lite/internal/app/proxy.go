@@ -25,11 +25,12 @@ const (
 )
 
 var (
-	errKeyAccessRevoked     = errors.New("API key access revoked while request was in flight")
-	errAccountAccessRevoked = errors.New("ChatGPT account access revoked while request was in flight")
-	errIPAccessBanned       = errors.New("source IP banned while request was in flight")
-	errBackupRestoreActive  = errors.New("portable backup restore is in progress")
-	ErrRequestDrainTimeout  = errors.New("timed out waiting for in-flight requests to exit")
+	errKeyAccessRevoked      = errors.New("API key access revoked while request was in flight")
+	errAccountAccessRevoked  = errors.New("ChatGPT account access revoked while request was in flight")
+	errDesktopSessionRevoked = errors.New("Infinite AI desktop session revoked while request was in flight")
+	errIPAccessBanned        = errors.New("source IP banned while request was in flight")
+	errBackupRestoreActive   = errors.New("portable backup restore is in progress")
+	ErrRequestDrainTimeout   = errors.New("timed out waiting for in-flight requests to exit")
 )
 
 const keyRequestDrainTimeout = 15 * time.Second
@@ -44,6 +45,8 @@ type proxyState struct {
 }
 
 type keyRequestContextKey struct{}
+type desktopProxyContextKey struct{}
+type desktopSessionContextKey struct{}
 
 type keyRequestRegistration struct {
 	keyID     int64
@@ -51,16 +54,43 @@ type keyRequestRegistration struct {
 }
 
 func (s *Server) proxyHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	root := http.NewServeMux()
+	root.HandleFunc("POST /api/desktop/auth/start", s.desktopAuthStart)
+	root.HandleFunc("POST /api/desktop/auth/poll", s.desktopAuthPoll)
+	root.HandleFunc("POST /api/desktop/auth/refresh", s.desktopAuthRefresh)
+	root.HandleFunc("GET /api/desktop/session", s.desktopSessionStatus)
+	root.HandleFunc("GET /api/desktop/session/watch", s.desktopSessionWatch)
+	root.HandleFunc("POST /api/desktop/session/logout", s.desktopSessionLogout)
+	root.HandleFunc("GET /api/desktop/policy", s.desktopPolicyGet)
+	// These endpoints retain the signed desktop wire protocol.  When the
+	// PostgreSQL platform switch is on they are backed exclusively by the
+	// platform device/session tables; the legacy SQLite bridge never receives
+	// a request for a fgds_ session.
+	root.HandleFunc("GET /api/desktop/agent/sub-keys", s.desktopAgentSubKeys)
+	root.HandleFunc("POST /api/desktop/agent/sub-keys", s.desktopAgentSubKeys)
+	root.HandleFunc("DELETE /api/desktop/agent/sub-keys/{id}", s.desktopAgentSubKey)
+	root.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/health" {
 			writeJSON(w, 200, map[string]string{"status": "ok"})
 			return
 		}
 		s.serveProxy(w, r)
 	})
+	return root
 }
 
 func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
+	if s.servePlatformGatewayIfMatched(w, r) {
+		return
+	}
+	if s.cfg.PlatformGatewayEnabled && !strings.HasPrefix(extractAPIKey(r), "fgds_") {
+		// After the explicit cutover, a legacy external key must not retain an
+		// alternate path such as /responses that bypasses PostgreSQL scopes,
+		// wallets, routing and audit. The sole exception is the signed desktop
+		// bridge, which remains isolated until its device migration is complete.
+		s.platformGatewayInvalidPath(w, r, s.realIP(r))
+		return
+	}
 	start := time.Now()
 	ip := s.realIP(r)
 	suffix, ok := codexSuffix(r.URL.Path)
@@ -81,20 +111,43 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	plainKey := extractAPIKey(r)
 	deviceToken := extractDeviceToken(r)
-	if plainKey == "" {
-		s.rejectUnauthorized(w, r, ip, "missing_key", "missing API key", http.StatusUnauthorized)
-		return
-	}
-	key, keyErr := s.store.AuthorizeKeyWithDevice(r.Context(), plainKey, ip, deviceToken)
-	if keyErr != nil {
-		if errors.Is(keyErr, ErrIPNotAllowed) {
-			s.rejectUnauthorized(w, r, ip, "ip_not_allowed", "key exists but source IP is not authorized", http.StatusForbidden)
-		} else if errors.Is(keyErr, ErrDeviceNotAllowed) {
-			s.rejectUnauthorized(w, r, ip, "device_not_allowed", "key requires a registered device credential", http.StatusForbidden)
-		} else {
-			s.rejectUnauthorized(w, r, ip, "invalid_key", "unknown or disabled API key", http.StatusUnauthorized)
+	var key *APIKey
+	desktopRequest := strings.HasPrefix(plainKey, "fgds_")
+	if desktopRequest {
+		desktopAuth, desktopKey, desktopErr := s.desktopProvisionedKey(r)
+		if desktopErr != nil {
+			desktopAuthError(w, desktopErr)
+			return
 		}
-		return
+		key = desktopKey
+		r = r.WithContext(context.WithValue(r.Context(), desktopProxyContextKey{}, true))
+		r = r.WithContext(context.WithValue(r.Context(), desktopSessionContextKey{}, *desktopAuth))
+	} else {
+		policy := s.currentDesktopPolicy()
+		if policy.ExternalAPIMode != "authenticated_public" {
+			code, detail := "external_api_disabled", "external API access is disabled"
+			if policy.ExternalAPIMode == "official_client_only" {
+				code, detail = "official_client_only", "only the signed Infinite AI desktop client may use this gateway"
+			}
+			s.rejectUnauthorized(w, r, ip, code, detail, http.StatusForbidden)
+			return
+		}
+		if plainKey == "" {
+			s.rejectUnauthorized(w, r, ip, "missing_key", "missing API key", http.StatusUnauthorized)
+			return
+		}
+		var keyErr error
+		key, keyErr = s.store.AuthorizeKeyWithDevice(r.Context(), plainKey, ip, deviceToken)
+		if keyErr != nil {
+			if errors.Is(keyErr, ErrIPNotAllowed) {
+				s.rejectUnauthorized(w, r, ip, "ip_not_allowed", "key exists but source IP is not authorized", http.StatusForbidden)
+			} else if errors.Is(keyErr, ErrDeviceNotAllowed) {
+				s.rejectUnauthorized(w, r, ip, "device_not_allowed", "key requires a registered device credential", http.StatusForbidden)
+			} else {
+				s.rejectUnauthorized(w, r, ip, "invalid_key", "unknown or disabled API key", http.StatusUnauthorized)
+			}
+			return
+		}
 	}
 	if r.ContentLength > s.cfg.MaxBodyBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "请求内容超过网关限制")
@@ -103,7 +156,13 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// Join the key/IP lifecycle before reading a potentially large body or using
 	// any ChatGPT credential. The final admission below is the only place that
 	// consumes request quota.
-	r, preflightFinish, preflightErr := s.beginKeyMetadataRequestWithDevice(r, key.ID, ip, deviceToken)
+	var preflightFinish func()
+	var preflightErr error
+	if desktopRequest {
+		r, preflightFinish, preflightErr = s.beginDesktopMetadataRequest(r, key.ID, ip)
+	} else {
+		r, preflightFinish, preflightErr = s.beginKeyMetadataRequestWithDevice(r, key.ID, ip, deviceToken)
+	}
 	if preflightErr != nil {
 		s.writeKeyAdmissionError(w, preflightErr)
 		return
@@ -125,8 +184,16 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// tool/image payloads spill to a private temporary file, so a model placed
 	// after the old 128 KiB observation window cannot bypass model routing while
 	// the exact original bytes are still replayed to the OAuth upstream.
-	replayBody, fields, bodyErr := spoolRequestBody(w, r, s.cfg.MaxBodyBytes)
+	managedInstructions := ""
+	if desktopRequest && suffix == "/responses" {
+		managedInstructions = strings.TrimSpace(s.currentDesktopPolicy().SystemPrompt)
+	}
+	replayBody, fields, bodyErr := spoolRequestBody(w, r, s.cfg.MaxBodyBytes, managedInstructions)
 	if bodyErr != nil {
+		if errors.Is(bodyErr, ErrDesktopBodyTampered) {
+			s.rejectUnauthorized(w, r, ip, "desktop_body_tampered", "desktop request body digest mismatch", http.StatusUnauthorized)
+			return
+		}
 		var maxBytesError *http.MaxBytesError
 		if errors.As(bodyErr, &maxBytesError) {
 			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "请求内容超过网关限制")
@@ -146,7 +213,7 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 	affinityHash := accountAffinityHash(r, key.ID, suffix, promptCacheKey, compactSeed)
 	account, err := s.store.SelectAccountForModel(r.Context(), key.ID, affinityHash, requestedModel, s.cfg.StickyTTL)
 	if err != nil {
-		if cause := context.Cause(r.Context()); errors.Is(cause, errKeyAccessRevoked) || errors.Is(cause, errAccountAccessRevoked) || errors.Is(cause, errIPAccessBanned) {
+		if cause := context.Cause(r.Context()); errors.Is(cause, errKeyAccessRevoked) || errors.Is(cause, errAccountAccessRevoked) || errors.Is(cause, errDesktopSessionRevoked) || errors.Is(cause, errIPAccessBanned) {
 			s.writeKeyAdmissionError(w, cause)
 			return
 		}
@@ -167,7 +234,7 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	account, err = s.refreshAccountIfNeeded(r.Context(), account)
 	if err != nil {
-		if cause := context.Cause(r.Context()); errors.Is(cause, errKeyAccessRevoked) || errors.Is(cause, errAccountAccessRevoked) || errors.Is(cause, errIPAccessBanned) {
+		if cause := context.Cause(r.Context()); errors.Is(cause, errKeyAccessRevoked) || errors.Is(cause, errAccountAccessRevoked) || errors.Is(cause, errDesktopSessionRevoked) || errors.Is(cause, errIPAccessBanned) {
 			s.writeKeyAdmissionError(w, cause)
 			return
 		}
@@ -175,7 +242,12 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, "token_refresh_failed", "ChatGPT 授权已过期且刷新失败")
 		return
 	}
-	r, finishRequest, err := s.beginKeyRequestWithDevice(r, key.ID, account.ID, ip, deviceToken)
+	var finishRequest func()
+	if desktopRequest {
+		r, finishRequest, err = s.beginDesktopKeyRequest(r, key.ID, account.ID, ip)
+	} else {
+		r, finishRequest, err = s.beginKeyRequestWithDevice(r, key.ID, account.ID, ip, deviceToken)
+	}
 	if err != nil {
 		if errors.Is(err, errBackupRestoreActive) {
 			writeError(w, http.StatusServiceUnavailable, "restore_in_progress", "系统正在恢复备份，请稍后重试")
@@ -183,6 +255,10 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, ErrKeyInactive) || errors.Is(err, errKeyAccessRevoked) {
 			writeError(w, http.StatusUnauthorized, "key_inactive", "该密钥已被停用或删除")
+			return
+		}
+		if errors.Is(err, errDesktopSessionRevoked) {
+			writeError(w, http.StatusUnauthorized, "desktop_session_invalid", "Infinite AI 登录或设备授权已被撤销")
 			return
 		}
 		if errors.Is(err, ErrIPNotAllowed) {
@@ -201,8 +277,10 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finishRequest()
-	s.store.TouchKeyIP(r.Context(), key.ID, ip)
-	s.store.TouchKeyDevice(r.Context(), key.ID, deviceToken)
+	if !desktopRequest {
+		s.store.TouchKeyIP(r.Context(), key.ID, ip)
+		s.store.TouchKeyDevice(r.Context(), key.ID, deviceToken)
+	}
 	state := &proxyState{status: 200}
 	target, err := url.Parse(s.cfg.UpstreamBaseURL + suffix)
 	if err != nil {
@@ -246,6 +324,13 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 				writeError(rw, http.StatusServiceUnavailable, "account_unavailable", "ChatGPT 账号已被管理员停用或删除")
 				return
 			}
+			if errors.Is(cause, errDesktopSessionRevoked) {
+				state.status = http.StatusUnauthorized
+				state.errText = "Infinite AI desktop session revoked"
+				state.accessRevoked = true
+				writeError(rw, http.StatusUnauthorized, "desktop_session_invalid", "Infinite AI 登录或设备授权已被撤销")
+				return
+			}
 			if errors.Is(cause, errIPAccessBanned) {
 				state.status = http.StatusForbidden
 				state.errText = "source IP banned by administrator or security policy"
@@ -270,11 +355,13 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 			// is expected: retain the partial usage record and never append JSON
 			// to the already-started upstream stream.
 			cause := context.Cause(r.Context())
-			if recovered == http.ErrAbortHandler && (errors.Is(cause, errKeyAccessRevoked) || errors.Is(cause, errAccountAccessRevoked) || errors.Is(cause, errIPAccessBanned)) {
+			if recovered == http.ErrAbortHandler && (errors.Is(cause, errKeyAccessRevoked) || errors.Is(cause, errAccountAccessRevoked) || errors.Is(cause, errDesktopSessionRevoked) || errors.Is(cause, errIPAccessBanned)) {
 				if errors.Is(cause, errIPAccessBanned) {
 					state.errText = "source IP banned by administrator or security policy"
 				} else if errors.Is(cause, errAccountAccessRevoked) {
 					state.errText = "ChatGPT account access revoked by administrator"
+				} else if errors.Is(cause, errDesktopSessionRevoked) {
+					state.errText = "Infinite AI desktop session revoked"
 				} else {
 					state.errText = "key access revoked by administrator"
 				}
@@ -293,6 +380,9 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 		state.accessRevoked = true
 	} else if errors.Is(context.Cause(r.Context()), errAccountAccessRevoked) {
 		state.errText = "ChatGPT account access revoked by administrator"
+		state.accessRevoked = true
+	} else if errors.Is(context.Cause(r.Context()), errDesktopSessionRevoked) {
+		state.errText = "Infinite AI desktop session revoked"
 		state.accessRevoked = true
 	} else if errors.Is(context.Cause(r.Context()), errIPAccessBanned) {
 		state.errText = "source IP banned by administrator or security policy"
@@ -327,6 +417,8 @@ func (s *Server) writeKeyAdmissionError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnauthorized, "key_inactive", "该密钥已被停用或删除")
 	case errors.Is(err, errAccountAccessRevoked):
 		writeError(w, http.StatusServiceUnavailable, "account_unavailable", "ChatGPT 账号已被管理员停用或删除")
+	case errors.Is(err, errDesktopSessionRevoked):
+		writeError(w, http.StatusUnauthorized, "desktop_session_invalid", "Infinite AI 登录或设备授权已被撤销")
 	case errors.Is(err, ErrIPNotAllowed):
 		writeError(w, http.StatusForbidden, "ip_not_allowed", "当前 IP 授权已被删除")
 	case errors.Is(err, ErrDeviceNotAllowed):
@@ -403,6 +495,66 @@ func (s *Server) beginKeyMetadataRequestWithDevice(r *http.Request, keyID int64,
 	return s.registerKeyRequestLocked(r, keyID, 0, ip)
 }
 
+// Desktop requests are authenticated by a short-lived user session plus an
+// Ed25519 device signature. They intentionally do not inherit the external
+// key's IP/device bearer ACL: dynamic-IP desktop access is governed by the
+// independently revocable desktop device. Key status, quota, fixed account
+// binding and in-flight cancellation remain exactly the same.
+func (s *Server) beginDesktopMetadataRequest(r *http.Request, keyID int64, ip string) (*http.Request, func(), error) {
+	s.keyRequestMu.Lock()
+	defer s.keyRequestMu.Unlock()
+	if s.restoreInProgress {
+		return r, func() {}, errBackupRestoreActive
+	}
+	if s.isBannedCached(ip, "api") {
+		return r, func() {}, errIPAccessBanned
+	}
+	if err := s.requireCurrentDesktopSession(r); err != nil {
+		return r, func() {}, errDesktopSessionRevoked
+	}
+	if _, err := s.store.DesktopAPIKey(r.Context(), keyID); err != nil {
+		return r, func() {}, ErrKeyInactive
+	}
+	return s.registerKeyRequestLocked(r, keyID, 0, ip)
+}
+
+func (s *Server) beginDesktopKeyRequest(r *http.Request, keyID, accountID int64, ip string) (*http.Request, func(), error) {
+	s.keyRequestMu.Lock()
+	defer s.keyRequestMu.Unlock()
+	if s.restoreInProgress {
+		return r, func() {}, errBackupRestoreActive
+	}
+	if cause := context.Cause(r.Context()); cause != nil {
+		return r, func() {}, cause
+	}
+	if s.isBannedCached(ip, "api") {
+		return r, func() {}, errIPAccessBanned
+	}
+	if err := s.requireCurrentDesktopSession(r); err != nil {
+		return r, func() {}, errDesktopSessionRevoked
+	}
+	if err := s.store.RequireActiveAccount(r.Context(), accountID); err != nil {
+		return r, func() {}, err
+	}
+	if _, err := s.store.DesktopAPIKey(r.Context(), keyID); err != nil {
+		return r, func() {}, ErrKeyInactive
+	}
+	if err := s.store.ConsumeQuota(r.Context(), keyID); err != nil {
+		return r, func() {}, err
+	}
+	if registration, ok := r.Context().Value(keyRequestContextKey{}).(keyRequestRegistration); ok && registration.keyID == keyID {
+		if requests := s.keyRequests[keyID]; requests != nil {
+			if active, exists := requests[registration.requestID]; exists {
+				active.accountID = accountID
+				requests[registration.requestID] = active
+				return r, func() {}, nil
+			}
+		}
+		return r, func() {}, ErrKeyInactive
+	}
+	return s.registerKeyRequestLocked(r, keyID, accountID, ip)
+}
+
 // registerKeyRequestLocked records a request after its final authorization
 // check. The caller must hold keyRequestMu.
 func (s *Server) registerKeyRequestLocked(r *http.Request, keyID, accountID int64, ip string) (*http.Request, func(), error) {
@@ -413,7 +565,13 @@ func (s *Server) registerKeyRequestLocked(r *http.Request, keyID, accountID int6
 	if s.keyRequests[keyID] == nil {
 		s.keyRequests[keyID] = make(map[uint64]activeKeyRequest)
 	}
-	s.keyRequests[keyID][requestID] = activeKeyRequest{accountID: accountID, ip: ip, cancel: cancel, done: done}
+	active := activeKeyRequest{accountID: accountID, ip: ip, cancel: cancel, done: done}
+	if desktop, ok := r.Context().Value(desktopSessionContextKey{}).(desktopSessionAuth); ok {
+		active.desktopUserID = desktop.UserID
+		active.desktopDeviceID = desktop.DeviceID
+		active.desktopSessionID = desktop.SessionID
+	}
+	s.keyRequests[keyID][requestID] = active
 	ctx = context.WithValue(ctx, keyRequestContextKey{}, keyRequestRegistration{keyID: keyID, requestID: requestID})
 	var once sync.Once
 	finish := func() {
@@ -431,6 +589,18 @@ func (s *Server) registerKeyRequestLocked(r *http.Request, keyID, accountID int6
 	return r.WithContext(ctx), finish, nil
 }
 
+func (s *Server) requireCurrentDesktopSession(r *http.Request) error {
+	expected, ok := r.Context().Value(desktopSessionContextKey{}).(desktopSessionAuth)
+	if !ok || expected.SessionID == 0 {
+		return ErrDesktopSessionInvalid
+	}
+	current, err := s.store.DesktopSessionByAccess(r.Context(), desktopBearer(r, "fgds_"))
+	if err != nil || current.SessionID != expected.SessionID || current.DeviceID != expected.DeviceID || current.UserID != expected.UserID {
+		return ErrDesktopSessionInvalid
+	}
+	return nil
+}
+
 func (s *Server) cancelKeyRequestsLocked(keyID int64) []<-chan struct{} {
 	requests := s.keyRequests[keyID]
 	delete(s.keyRequests, keyID)
@@ -440,6 +610,72 @@ func (s *Server) cancelKeyRequestsLocked(keyID int64) []<-chan struct{} {
 		done = append(done, request.done)
 	}
 	return done
+}
+
+func (s *Server) cancelDesktopRequestsLocked(match func(activeKeyRequest) bool) []<-chan struct{} {
+	var done []<-chan struct{}
+	for keyID, requests := range s.keyRequests {
+		for requestID, request := range requests {
+			if !match(request) {
+				continue
+			}
+			request.cancel(errDesktopSessionRevoked)
+			done = append(done, request.done)
+			delete(requests, requestID)
+		}
+		if len(requests) == 0 {
+			delete(s.keyRequests, keyID)
+		}
+	}
+	return done
+}
+
+func (s *Server) revokeDesktopDevice(ctx context.Context, deviceID, ownerUserID int64) (int, error) {
+	s.keyRequestMu.Lock()
+	if err := s.store.RevokeDesktopDevice(ctx, deviceID, ownerUserID); err != nil {
+		s.keyRequestMu.Unlock()
+		return 0, err
+	}
+	requests := s.cancelDesktopRequestsLocked(func(request activeKeyRequest) bool {
+		return request.desktopDeviceID == deviceID
+	})
+	s.keyRequestMu.Unlock()
+	if err := waitKeyRequests(ctx, requests); err != nil {
+		return len(requests), err
+	}
+	return len(requests), nil
+}
+
+func (s *Server) updateDesktopUser(ctx context.Context, userID, apiKeyID int64, status string) (int, error) {
+	s.keyRequestMu.Lock()
+	if err := s.store.UpdateDesktopUser(ctx, userID, apiKeyID, status); err != nil {
+		s.keyRequestMu.Unlock()
+		return 0, err
+	}
+	requests := s.cancelDesktopRequestsLocked(func(request activeKeyRequest) bool {
+		return request.desktopUserID == userID
+	})
+	s.keyRequestMu.Unlock()
+	if err := waitKeyRequests(ctx, requests); err != nil {
+		return len(requests), err
+	}
+	return len(requests), nil
+}
+
+func (s *Server) revokeDesktopSession(ctx context.Context, sessionID int64) (int, error) {
+	s.keyRequestMu.Lock()
+	if err := s.store.RevokeDesktopSession(ctx, sessionID); err != nil {
+		s.keyRequestMu.Unlock()
+		return 0, err
+	}
+	requests := s.cancelDesktopRequestsLocked(func(request activeKeyRequest) bool {
+		return request.desktopSessionID == sessionID
+	})
+	s.keyRequestMu.Unlock()
+	if err := waitKeyRequests(ctx, requests); err != nil {
+		return len(requests), err
+	}
+	return len(requests), nil
 }
 
 func waitKeyRequests(ctx context.Context, requests []<-chan struct{}) error {
@@ -476,6 +712,25 @@ func (s *Server) cancelIPRequests(ips []string, wait bool) (int, error) {
 		}
 	}
 	s.keyRequestMu.Unlock()
+	// PostgreSQL-platform requests have an independent lifecycle registry so
+	// their UUID keys cannot collide with legacy SQLite key IDs. A manual or
+	// automatic IP ban is nevertheless one security boundary and must stop both
+	// gateway generations immediately.
+	s.platformRequestMu.Lock()
+	for keyID, requests := range s.platformRequests {
+		for requestID, request := range requests {
+			if !targets[request.ip] {
+				continue
+			}
+			request.cancel(errIPAccessBanned)
+			pending = append(pending, request.done)
+			delete(requests, requestID)
+		}
+		if len(requests) == 0 {
+			delete(s.platformRequests, keyID)
+		}
+	}
+	s.platformRequestMu.Unlock()
 	if wait {
 		if err := waitKeyRequests(context.Background(), pending); err != nil {
 			return len(pending), err
@@ -907,7 +1162,7 @@ func (body *temporaryRequestBody) Close() error {
 // spoolRequestBody retains small requests in memory and spills larger ones to
 // a mode-0600 temporary file. It scans the entire raw JSON stream for the two
 // routing fields without decoding or re-encoding any request content.
-func spoolRequestBody(w http.ResponseWriter, r *http.Request, limit int64) (io.ReadCloser, map[string]string, error) {
+func spoolRequestBody(w http.ResponseWriter, r *http.Request, limit int64, managedInstructions string) (io.ReadCloser, map[string]string, error) {
 	if r.Body == nil {
 		return io.NopCloser(bytes.NewReader(nil)), map[string]string{}, nil
 	}
@@ -915,6 +1170,11 @@ func spoolRequestBody(w http.ResponseWriter, r *http.Request, limit int64) (io.R
 	scanner := newTopLevelJSONStringScanner("model", "prompt_cache_key")
 	var memory bytes.Buffer
 	var temporary *temporaryRequestBody
+	var totalBytes int64
+	var firstNonWhitespace byte
+	var lastNonWhitespace byte
+	var lastNonWhitespaceOffset int64
+	var nonWhitespaceCount int64
 	cleanup := func() {
 		_ = limited.Close()
 		if temporary != nil {
@@ -949,11 +1209,23 @@ func spoolRequestBody(w http.ResponseWriter, r *http.Request, limit int64) (io.R
 	for {
 		n, readErr := limited.Read(buffer)
 		if n > 0 {
+			for index, value := range buffer[:n] {
+				if value == ' ' || value == '\t' || value == '\r' || value == '\n' {
+					continue
+				}
+				if nonWhitespaceCount == 0 {
+					firstNonWhitespace = value
+				}
+				nonWhitespaceCount++
+				lastNonWhitespace = value
+				lastNonWhitespaceOffset = totalBytes + int64(index)
+			}
 			scanner.Write(buffer[:n])
 			if err := writeChunk(buffer[:n]); err != nil {
 				cleanup()
 				return nil, nil, err
 			}
+			totalBytes += int64(n)
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
@@ -964,6 +1236,55 @@ func spoolRequestBody(w http.ResponseWriter, r *http.Request, limit int64) (io.R
 		}
 	}
 	_ = limited.Close()
+	managedInstructions = strings.TrimSpace(managedInstructions)
+	if managedInstructions != "" {
+		if firstNonWhitespace != '{' || lastNonWhitespace != '}' || nonWhitespaceCount < 2 {
+			cleanup()
+			return nil, nil, errors.New("managed Responses request must be a JSON object")
+		}
+		encoded, err := json.Marshal(managedInstructions)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		separator := []byte(",")
+		if nonWhitespaceCount == 2 {
+			separator = nil
+		}
+		injection := make([]byte, 0, len(separator)+len(encoded)+18)
+		injection = append(injection, separator...)
+		injection = append(injection, `"instructions":`...)
+		injection = append(injection, encoded...)
+		injection = append(injection, '}')
+		newSize := lastNonWhitespaceOffset + int64(len(injection))
+		if newSize > limit {
+			cleanup()
+			return nil, nil, &http.MaxBytesError{Limit: limit}
+		}
+		if temporary == nil {
+			original := memory.Bytes()
+			rewritten := make([]byte, 0, newSize)
+			rewritten = append(rewritten, original[:lastNonWhitespaceOffset]...)
+			rewritten = append(rewritten, injection...)
+			memory.Reset()
+			_, _ = memory.Write(rewritten)
+		} else {
+			if _, err := temporary.Seek(lastNonWhitespaceOffset, io.SeekStart); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			if _, err := temporary.Write(injection); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			if err := temporary.Truncate(newSize); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+		}
+		r.ContentLength = newSize
+		r.Header.Del("Content-Length")
+	}
 	if temporary == nil {
 		return io.NopCloser(bytes.NewReader(memory.Bytes())), scanner.Fields(), nil
 	}
@@ -1327,8 +1648,17 @@ func parseUsage(body []byte) (int64, int64, int64) {
 		return 0, 0, 0
 	}
 	input := numberField(best, "input_tokens")
+	if input == 0 {
+		input = numberField(best, "promptTokenCount")
+	}
 	output := numberField(best, "output_tokens")
+	if output == 0 {
+		output = numberField(best, "candidatesTokenCount") + numberField(best, "thoughtsTokenCount")
+	}
 	total := numberField(best, "total_tokens")
+	if total == 0 {
+		total = numberField(best, "totalTokenCount")
+	}
 	if total == 0 {
 		total = input + output
 	}
@@ -1338,6 +1668,9 @@ func findUsageMap(value any, best *map[string]any) {
 	switch item := value.(type) {
 	case map[string]any:
 		if usage, ok := item["usage"].(map[string]any); ok {
+			*best = usage
+		}
+		if usage, ok := item["usageMetadata"].(map[string]any); ok {
 			*best = usage
 		}
 		for _, child := range item {

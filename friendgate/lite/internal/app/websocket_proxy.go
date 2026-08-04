@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -79,6 +80,18 @@ func (s *Server) serveResponsesWebSocket(w http.ResponseWriter, r *http.Request,
 		writeResponsesWSError(clientConn, "first_message_required", "首个 response.create 消息读取失败")
 		return
 	}
+	desktop, _ := r.Context().Value(desktopProxyContextKey{}).(bool)
+	managedInstructions := ""
+	if desktop {
+		managedInstructions = strings.TrimSpace(s.currentDesktopPolicy().SystemPrompt)
+		if managedInstructions != "" {
+			firstPayload, err = injectManagedWSInstructions(firstPayload, managedInstructions, s.cfg.MaxBodyBytes)
+			if err != nil {
+				writeResponsesWSError(clientConn, "invalid_first_message", "首个 WebSocket 消息无法应用后台系统提示词")
+				return
+			}
+		}
+	}
 	firstEvent, err := parseResponsesWSClientEvent(firstPayload)
 	if err != nil || (firstType != websocket.MessageText && firstType != websocket.MessageBinary) {
 		writeResponsesWSError(clientConn, "invalid_first_message", "首个 WebSocket 消息必须是合法 JSON")
@@ -107,7 +120,13 @@ func (s *Server) serveResponsesWebSocket(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	admitted, finishRequest, err := s.beginKeyRequestWithDevice(r, key.ID, account.ID, ip, extractDeviceToken(r))
+	var admitted *http.Request
+	var finishRequest func()
+	if desktop {
+		admitted, finishRequest, err = s.beginDesktopKeyRequest(r, key.ID, account.ID, ip)
+	} else {
+		admitted, finishRequest, err = s.beginKeyRequestWithDevice(r, key.ID, account.ID, ip, extractDeviceToken(r))
+	}
 	if err != nil {
 		writeResponsesWSRoutingError(clientConn, err)
 		return
@@ -120,8 +139,10 @@ func (s *Server) serveResponsesWebSocket(w http.ResponseWriter, r *http.Request,
 		_ = clientConn.CloseNow()
 		finishRequest()
 	}()
-	s.store.TouchKeyIP(admitted.Context(), key.ID, ip)
-	s.store.TouchKeyDevice(admitted.Context(), key.ID, extractDeviceToken(r))
+	if !desktop {
+		s.store.TouchKeyIP(admitted.Context(), key.ID, ip)
+		s.store.TouchKeyDevice(admitted.Context(), key.ID, extractDeviceToken(r))
+	}
 
 	upstreamURL, upstreamHeader, err := s.responsesWSUpstreamRequest(admitted, key, account, suffix, promptCacheKey, compactSeed)
 	if err != nil {
@@ -177,7 +198,7 @@ func (s *Server) serveResponsesWebSocket(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	relay := s.relayResponsesWebSocket(admitted.Context(), clientConn, upstreamConn, account.ID, requestedModel)
+	relay := s.relayResponsesWebSocket(admitted.Context(), clientConn, upstreamConn, account.ID, requestedModel, managedInstructions)
 	status, detail := responsesWSRelayStatus(admitted.Context(), relay.err)
 	s.logResponsesWSUsage(startedAt, key.ID, account.ID, ip, r.URL.Path, relay.model, status, relay.inputTokens, relay.outputTokens, relay.totalTokens, relay.requestID, detail)
 	_, _, _, _, lifecycleCancelled := responsesWSLifecycleFailure(admitted.Context())
@@ -199,6 +220,36 @@ func parseResponsesWSClientEvent(payload []byte) (responsesWSClientEvent, error)
 	return event, nil
 }
 
+func injectManagedWSInstructions(payload []byte, managedInstructions string, limit int64) ([]byte, error) {
+	managedInstructions = strings.TrimSpace(managedInstructions)
+	if managedInstructions == "" {
+		return payload, nil
+	}
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
+		return nil, errors.New("Responses WebSocket event must be a JSON object")
+	}
+	encoded, err := json.Marshal(managedInstructions)
+	if err != nil {
+		return nil, err
+	}
+	closingOffset := bytes.LastIndexByte(payload, '}')
+	separator := []byte(",")
+	if len(bytes.TrimSpace(trimmed[1:len(trimmed)-1])) == 0 {
+		separator = nil
+	}
+	result := make([]byte, 0, closingOffset+len(separator)+len(encoded)+18)
+	result = append(result, payload[:closingOffset]...)
+	result = append(result, separator...)
+	result = append(result, `"instructions":`...)
+	result = append(result, encoded...)
+	result = append(result, '}')
+	if int64(len(result)) > limit {
+		return nil, errors.New("managed Responses WebSocket event exceeds request limit")
+	}
+	return result, nil
+}
+
 func (s *Server) responsesWSUpstreamRequest(r *http.Request, key *APIKey, account *Account, suffix, promptCacheKey, compactSeed string) (string, http.Header, error) {
 	target, err := url.Parse(s.cfg.UpstreamBaseURL + suffix)
 	if err != nil || target.Scheme == "" || target.Host == "" || target.Fragment != "" {
@@ -218,7 +269,7 @@ func (s *Server) responsesWSUpstreamRequest(r *http.Request, key *APIKey, accoun
 	return target.String(), request.Header, nil
 }
 
-func (s *Server) relayResponsesWebSocket(ctx context.Context, clientConn, upstreamConn *websocket.Conn, accountID int64, initialModel string) responsesWSRelayResult {
+func (s *Server) relayResponsesWebSocket(ctx context.Context, clientConn, upstreamConn *websocket.Conn, accountID int64, initialModel, managedInstructions string) responsesWSRelayResult {
 	relayCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type directionResult struct {
@@ -250,6 +301,14 @@ func (s *Server) relayResponsesWebSocket(ctx context.Context, clientConn, upstre
 						return
 					}
 					model = candidate
+				}
+				if event.Type == "response.create" && managedInstructions != "" {
+					payload, err = injectManagedWSInstructions(payload, managedInstructions, s.cfg.MaxBodyBytes)
+					if err != nil {
+						writeResponsesWSError(clientConn, "managed_instructions_failed", "后台系统提示词无法应用到当前请求")
+						results <- directionResult{direction: "client", result: responsesWSRelayResult{model: model, err: err}}
+						return
+					}
 				}
 			}
 			writeCtx, cancelWrite := context.WithTimeout(relayCtx, responsesWSWriteTimeout)
@@ -359,6 +418,8 @@ func writeResponsesWSRoutingError(conn *websocket.Conn, err error) {
 		writeResponsesWSError(conn, "ip_banned", "来源 IP 已被安全策略封禁")
 	case errors.Is(err, errAccountAccessRevoked):
 		writeResponsesWSError(conn, "account_unavailable", "ChatGPT 账号已被管理员停用或删除")
+	case errors.Is(err, errDesktopSessionRevoked):
+		writeResponsesWSError(conn, "desktop_session_invalid", "Infinite AI 登录或设备授权已被撤销")
 	case errors.Is(err, ErrNoAccount):
 		writeResponsesWSError(conn, "account_pool_unavailable", "ChatGPT 账号池当前没有可用账号")
 	case errors.Is(err, ErrQuotaExceeded):
@@ -458,6 +519,8 @@ func responsesWSLifecycleFailure(ctx context.Context) (status int, code, message
 		return http.StatusUnauthorized, "key_inactive", "该密钥已被停用或删除", "key access revoked by administrator", true
 	case errors.Is(cause, errAccountAccessRevoked):
 		return http.StatusServiceUnavailable, "account_unavailable", "ChatGPT 账号已被管理员停用或删除", "ChatGPT account access revoked by administrator", true
+	case errors.Is(cause, errDesktopSessionRevoked):
+		return http.StatusUnauthorized, "desktop_session_invalid", "Infinite AI 登录或设备授权已被撤销", "Infinite AI desktop session revoked", true
 	case errors.Is(cause, errIPAccessBanned):
 		return http.StatusForbidden, "ip_banned", "来源 IP 已被安全策略封禁", "source IP banned by administrator or security policy", true
 	default:

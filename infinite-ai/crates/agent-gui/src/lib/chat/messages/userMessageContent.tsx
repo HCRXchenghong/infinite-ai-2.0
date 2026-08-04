@@ -1,4 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternalUrl } from "../../desktopOpener";
 import {
   type FocusEvent,
   type MouseEvent,
@@ -646,7 +646,7 @@ function CommitReferenceTooltip({
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-primary hover:bg-primary/10"
-            onClick={() => void openUrl(commit.githubUrl!)}
+            onClick={() => void openExternalUrl(commit.githubUrl!)}
           >
             <GitHubMarkIcon className="h-3 w-3" />
             {t("chat.composer.commitTooltipOpenGithub")}
@@ -737,7 +737,7 @@ function GitFileMentionChip({ file }: { file: GitFileDisplayReference }) {
   const title = `${normalized.path}\n${refLabel} (${normalized.shortSha || normalized.commitSha.slice(0, 7)})`;
   const openFile = useCallback(() => {
     if (normalized.githubUrl) {
-      void openUrl(normalized.githubUrl);
+      void openExternalUrl(normalized.githubUrl);
     }
   }, [normalized.githubUrl]);
 
@@ -838,7 +838,7 @@ function CommitMentionChip({
 
   const openCommit = useCallback(() => {
     if (resolvedCommit.githubUrl) {
-      void openUrl(resolvedCommit.githubUrl);
+      void openExternalUrl(resolvedCommit.githubUrl);
     }
   }, [resolvedCommit.githubUrl]);
 

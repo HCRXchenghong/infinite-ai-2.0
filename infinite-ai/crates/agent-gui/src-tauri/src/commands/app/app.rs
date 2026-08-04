@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::runtime::terminal::TerminalSessionRegistry;
 
@@ -145,6 +146,33 @@ pub fn app_runtime_platform() -> RuntimePlatformResponse {
         "linux"
     };
     RuntimePlatformResponse { platform }
+}
+
+#[tauri::command]
+pub fn app_open_url(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed =
+        reqwest::Url::parse(url.trim()).map_err(|_| "只能打开有效的 HTTP(S) 链接".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.has_host()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err("只能打开有效的 HTTP(S) 链接".to_string());
+    }
+    app.opener()
+        .open_url(parsed.as_str(), None::<&str>)
+        .map_err(|error| format!("打开链接失败：{error}"))
+}
+
+#[tauri::command]
+pub fn app_reveal_item_in_dir(app: AppHandle, path: String) -> Result<(), String> {
+    let normalized = path.trim();
+    if normalized.is_empty() {
+        return Err("文件路径不能为空".to_string());
+    }
+    app.opener()
+        .reveal_item_in_dir(normalized)
+        .map_err(|error| format!("定位文件失败：{error}"))
 }
 
 #[tauri::command]

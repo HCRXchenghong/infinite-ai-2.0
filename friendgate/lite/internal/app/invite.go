@@ -98,7 +98,9 @@ func (s *Server) inviteVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "origin_rejected", "请求来源不受信任")
 		return
 	}
-	if !s.allowAttempt("invite:"+tokenHash(token)+":"+ip, 10, 10*time.Minute) {
+	invitationHash := tokenHash(token)
+	if !s.allowAttempt("invite:"+invitationHash+":"+ip, 10, 10*time.Minute) ||
+		!s.allowAttempt("invite-token:"+invitationHash, 50, 10*time.Minute) {
 		s.recordInvitationUnauthorized(r, "invalid_invitation_code", "recognition-code attempts exceeded the in-memory limit for "+invitationFingerprint(token))
 		writeError(w, 429, "too_many_attempts", "识别码尝试次数过多，请稍后再试")
 		return
@@ -332,6 +334,10 @@ func (s *Server) inviteRevealKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) inviteClose(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "origin_rejected", "请求来源不受信任")
+		return
+	}
 	http.SetCookie(w, expiredCookie(claimCookieName, s.cfg.SecureCookies))
 	w.WriteHeader(http.StatusNoContent)
 }

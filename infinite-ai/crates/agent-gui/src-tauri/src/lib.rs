@@ -27,6 +27,16 @@ const APP_ACTION_EVENT: &str = "app:action";
 /// Rust 直连动作的结果反馈（如托盘触发 cron）：前端收到后 toast 呈现。
 const APP_ACTION_FEEDBACK_EVENT: &str = "app:action-feedback";
 
+fn unauthenticated_invoke_allowed(command: &str) -> bool {
+    matches!(
+        command,
+        "friendgate_auth_state"
+            | "friendgate_auth_start"
+            | "friendgate_auth_poll"
+            | "friendgate_auth_logout"
+    )
+}
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TerminalExitRequestedEvent {
@@ -138,6 +148,8 @@ macro_rules! app_invoke_handler {
             commands::update::app_update_install,
             commands::update::app_restart,
             commands::app::app_runtime_platform,
+            commands::app::app_open_url,
+            commands::app::app_reveal_item_in_dir,
             commands::app::app_set_close_window_behavior,
             commands::app::app_set_global_shortcuts,
             commands::app::app_window_pinned,
@@ -145,6 +157,11 @@ macro_rules! app_invoke_handler {
             commands::app::app_confirmed_exit,
             commands::app::app_macos_traffic_light_metrics,
             commands::tray::app_tray_menu_sync,
+            commands::friendgate::friendgate_auth_state,
+            commands::friendgate::friendgate_auth_start,
+            commands::friendgate::friendgate_auth_poll,
+            commands::friendgate::friendgate_auth_logout,
+            commands::friendgate::friendgate_policy,
             // Hooks
             commands::hook::hook_run_script,
             commands::hook::hook_run_http_requests,
@@ -284,6 +301,8 @@ macro_rules! app_invoke_handler {
             commands::gateway::provider_usage_query,
             commands::gateway::provider_usage_test,
             services::proxy::proxy_get_server_info,
+            services::proxy::proxy_rotate_sub_key,
+            services::proxy::proxy_revoke_sub_key,
         ]
     };
 }
@@ -433,6 +452,22 @@ fn forward_app_action(
 }
 
 fn dispatch_app_action(app: &tauri::AppHandle, action: AppAction) {
+    let public_action = matches!(
+        &action,
+        AppAction::Summon | AppAction::ToggleWindow | AppAction::Quit
+    );
+    if !public_action
+        && !app
+            .try_state::<Arc<services::friendgate_auth::FriendGateAuthManager>>()
+            .is_some_and(|auth| auth.runtime_authorized())
+    {
+        let _ = show_main_window(app);
+        let _ = app.emit(
+            services::friendgate_auth::SESSION_REVOKED_EVENT,
+            serde_json::json!({"reason":"authentication_required"}),
+        );
+        return;
+    }
     match action {
         AppAction::Summon => {
             if let Err(error) = show_main_window(app) {
@@ -658,15 +693,19 @@ pub fn run() {
         }
     }
 
+    let friendgate_auth = services::friendgate_auth::FriendGateAuthManager::open()
+        .expect("failed to initialize Infinite AI FriendGate device identity");
     let automation_store = Arc::new(
         services::automation::AutomationStore::open()
             .expect("failed to initialize Infinite AI automation store"),
     );
     let automation_scheduler = Arc::new(services::automation::AutomationScheduler::new(
         Arc::clone(&automation_store),
+        Arc::clone(&friendgate_auth),
     ));
     let memory_store = Arc::new(
-        services::memory::MemoryStore::open().expect("failed to initialize Infinite AI memory store"),
+        services::memory::MemoryStore::open()
+            .expect("failed to initialize Infinite AI memory store"),
     );
     let provider_usage_service =
         Arc::new(services::provider_usage::ProviderUsageService::default());
@@ -682,11 +721,15 @@ pub fn run() {
     let close_window_behavior = Arc::new(commands::app::CloseWindowBehaviorState::new(
         commands::app::CLOSE_WINDOW_BEHAVIOR_MINIMIZE,
     ));
+    let core_invoke_handler: Box<tauri::ipc::InvokeHandler<tauri::Wry>> =
+        Box::new(app_invoke_handler!());
+    let invoke_auth = Arc::clone(&friendgate_auth);
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_mcp_bridge::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    let app = builder
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(WINDOW_STATE_FLAGS)
@@ -714,6 +757,7 @@ pub fn run() {
         .manage(Arc::clone(&git_clone_task_registry))
         .manage(Arc::clone(&allow_exit))
         .manage(Arc::clone(&close_window_behavior))
+        .manage(Arc::clone(&friendgate_auth))
         .manage(Arc::clone(&automation_store))
         .manage(Arc::clone(&automation_scheduler))
         .manage(Arc::new(commands::hook::HookScopeRegistry::default()))
@@ -723,6 +767,7 @@ pub fn run() {
             let managed_process_registry = Arc::clone(&managed_process_registry);
             let git_clone_task_registry = Arc::clone(&git_clone_task_registry);
             let provider_usage_service = Arc::clone(&provider_usage_service);
+            let friendgate_auth = Arc::clone(&friendgate_auth);
             move |app| {
                 commands::history_db::initialize_history_db()?;
                 configure_system_tray(app)?;
@@ -732,7 +777,10 @@ pub fn run() {
                     eprintln!("failed to initialize system proxy state: {error}");
                 }
                 commands::system::gc_upload_staging_on_startup();
-                app.manage(services::proxy::start_proxy_server()?);
+                app.manage(services::proxy::start_proxy_server(Arc::clone(
+                    &friendgate_auth,
+                ))?);
+                friendgate_auth.start_revocation_watch(app.handle().clone());
                 if let Err(error) = services::skills::ensure_builtin_agent_skills_sync() {
                     eprintln!("failed to seed builtin skills: {error}");
                 }
@@ -747,6 +795,7 @@ pub fn run() {
                     Arc::clone(&sftp_registry),
                     Arc::clone(&managed_process_registry),
                     Arc::clone(&git_clone_task_registry),
+                    Arc::clone(&friendgate_auth),
                 ));
                 managed_process_registry.set_notifier(
                     runtime::managed_process::ManagedProcessNotifier {
@@ -796,7 +845,16 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(app_invoke_handler!())
+        .invoke_handler(move |invoke| {
+            let command = invoke.message.command().to_string();
+            if unauthenticated_invoke_allowed(&command) || invoke_auth.runtime_authorized() {
+                return core_invoke_handler(invoke);
+            }
+            invoke
+                .resolver
+                .reject("Infinite AI 登录未验证或已失效，已拒绝调用本机能力");
+            true
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
@@ -844,4 +902,36 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod auth_gate_tests {
+    use super::unauthenticated_invoke_allowed;
+
+    #[test]
+    fn unauthenticated_ipc_allowlist_contains_only_login_flow_commands() {
+        for command in [
+            "friendgate_auth_state",
+            "friendgate_auth_start",
+            "friendgate_auth_poll",
+            "friendgate_auth_logout",
+        ] {
+            assert!(unauthenticated_invoke_allowed(command), "{command}");
+        }
+
+        for command in [
+            "friendgate_policy",
+            "proxy_get_server_info",
+            "proxy_rotate_sub_key",
+            "fs_read_text",
+            "fs_write_text",
+            "shell_run",
+            "gateway_connect",
+            "automation_snapshot",
+            "app_open_url",
+            "app_reveal_item_in_dir",
+        ] {
+            assert!(!unauthenticated_invoke_allowed(command), "{command}");
+        }
+    }
 }

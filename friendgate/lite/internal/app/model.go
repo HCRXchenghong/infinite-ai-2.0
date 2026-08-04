@@ -53,6 +53,47 @@ type KeyIP struct {
 	LastSeenAt  int64  `json:"last_seen_at,omitempty"`
 }
 
+type DesktopUser struct {
+	ID          int64  `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Status      string `json:"status"`
+	APIKeyID    int64  `json:"api_key_id,omitempty"`
+	KeyRole     string `json:"key_role,omitempty"`
+	LastLoginAt int64  `json:"last_login_at,omitempty"`
+	CreatedAt   int64  `json:"created_at"`
+}
+
+type DesktopDevice struct {
+	ID           int64  `json:"id"`
+	UserID       int64  `json:"user_id"`
+	UserEmail    string `json:"user_email,omitempty"`
+	Name         string `json:"name"`
+	Platform     string `json:"platform,omitempty"`
+	MAC          string `json:"mac,omitempty"`
+	RegisteredIP string `json:"registered_ip"`
+	LastIP       string `json:"last_ip,omitempty"`
+	Status       string `json:"status"`
+	LastSeenAt   int64  `json:"last_seen_at,omitempty"`
+	CreatedAt    int64  `json:"created_at"`
+}
+
+type DesktopPolicy struct {
+	RegistrationEnabled bool `json:"registration_enabled"`
+	// ExternalAPIMode is the authoritative three-state policy for callers that
+	// are not the signed desktop client: authenticated_public,
+	// official_client_only, or disabled. The two booleans remain in the wire
+	// shape while existing installations migrate their stored settings.
+	ExternalAPIMode     string   `json:"external_api_mode"`
+	PublicAPIEnabled    bool     `json:"public_api_enabled"`
+	OfficialDesktopOnly bool     `json:"official_desktop_only"`
+	GatewayBaseURL      string   `json:"gateway_base_url"`
+	ProviderName        string   `json:"provider_name"`
+	DefaultModel        string   `json:"default_model"`
+	AllowedModels       []string `json:"allowed_models"`
+	SystemPrompt        string   `json:"system_prompt"`
+}
+
 type Invitation struct {
 	ID               int64          `json:"id"`
 	Role             string         `json:"role"`

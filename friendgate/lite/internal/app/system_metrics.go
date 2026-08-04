@@ -142,8 +142,19 @@ func readStorage(path string) (total, used uint64, err error) {
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return 0, 0, err
 	}
-	total = stat.Blocks * uint64(stat.Bsize)
-	available := stat.Bavail * uint64(stat.Bsize)
+	if stat.Bsize <= 0 || stat.Bavail < 0 {
+		return 0, 0, os.ErrInvalid
+	}
+	// Statfs_t exposes signed block sizes/available blocks on Linux. Reject
+	// negative values and multiplication overflow before converting them.
+	blockSize := uint64(stat.Bsize)        // #nosec G115 -- positive value checked above
+	availableBlocks := uint64(stat.Bavail) // #nosec G115 -- non-negative value checked above
+	maxUint64 := ^uint64(0)
+	if stat.Blocks > maxUint64/blockSize || availableBlocks > maxUint64/blockSize {
+		return 0, 0, os.ErrInvalid
+	}
+	total = stat.Blocks * blockSize
+	available := availableBlocks * blockSize
 	if total == 0 || available > total {
 		return 0, 0, os.ErrInvalid
 	}

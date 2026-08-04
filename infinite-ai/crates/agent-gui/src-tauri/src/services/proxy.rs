@@ -1,23 +1,30 @@
 use std::{
-    net::{Ipv4Addr, TcpListener},
-    sync::Arc,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener},
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
 use axum::{
     body::{to_bytes, Body},
-    extract::{OriginalUri, Path, Query, State},
+    extract::{
+        ws::{Message as AxumWebSocketMessage, WebSocket, WebSocketUpgrade},
+        OriginalUri, Path, Query, State,
+    },
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{any, get},
     Router,
 };
 use base64::Engine as _;
+use futures_util::{SinkExt, StreamExt};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener as TokioTcpListener;
-use uuid::Uuid;
+use tokio_tungstenite::{
+    tungstenite::Message as UpstreamWebSocketMessage, MaybeTlsStream, WebSocketStream,
+};
 
 const ACCESS_CONTROL_REQUEST_HEADERS: &str = "access-control-request-headers";
 const ACCESS_CONTROL_REQUEST_METHOD: &str = "access-control-request-method";
@@ -47,7 +54,9 @@ const ALLOW_METHODS_VALUE: &str = "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD";
 const VARY_VALUE: &str = "Origin, Access-Control-Request-Method, Access-Control-Request-Headers";
 const IMAGE_PROXY_MAX_BYTES: usize = 25 * 1024 * 1024;
 const IMAGE_PROXY_TIMEOUT_SECS: u64 = 20;
-const IMAGE_PROXY_ACCEPT: &str = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+const IMAGE_PROXY_MAX_REDIRECTS: usize = 5;
+const IMAGE_PROXY_ACCEPT: &str =
+    "image/avif,image/webp,image/apng,image/png,image/jpeg,image/gif,image/*;q=0.8";
 const IMAGE_PROXY_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 const IMAGE_PROXY_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -56,11 +65,13 @@ pub struct ProxyServerInfo {
     #[serde(rename = "baseUrl")]
     pub base_url: String,
     pub token: String,
+    pub enabled: bool,
 }
 
 pub struct ProxyServerState {
-    info: ProxyServerInfo,
+    info: RwLock<ProxyServerInfo>,
     client: reqwest::Client,
+    friendgate_auth: Arc<crate::services::friendgate_auth::FriendGateAuthManager>,
 }
 
 #[derive(Deserialize)]
@@ -73,14 +84,54 @@ struct ProxyRoutePath {
 #[derive(Deserialize)]
 struct ImageProxyQuery {
     url: String,
+    token: String,
 }
 
 #[tauri::command]
-pub fn proxy_get_server_info(state: tauri::State<'_, Arc<ProxyServerState>>) -> ProxyServerInfo {
-    state.info.clone()
+pub async fn proxy_get_server_info(
+    state: tauri::State<'_, Arc<ProxyServerState>>,
+) -> Result<ProxyServerInfo, String> {
+    let token = state.friendgate_auth.local_sub_key().await?;
+    let mut info = state
+        .info
+        .write()
+        .map_err(|_| "本地子 Key 状态不可用".to_string())?;
+    info.token = token;
+    info.enabled = true;
+    Ok(info.clone())
 }
 
-pub fn start_proxy_server() -> Result<Arc<ProxyServerState>, String> {
+#[tauri::command]
+pub async fn proxy_rotate_sub_key(
+    state: tauri::State<'_, Arc<ProxyServerState>>,
+) -> Result<ProxyServerInfo, String> {
+    let token = state.friendgate_auth.rotate_local_sub_key().await?;
+    let mut info = state
+        .info
+        .write()
+        .map_err(|_| "本地子 Key 状态不可用".to_string())?;
+    info.token = token;
+    info.enabled = true;
+    Ok(info.clone())
+}
+
+#[tauri::command]
+pub async fn proxy_revoke_sub_key(
+    state: tauri::State<'_, Arc<ProxyServerState>>,
+) -> Result<ProxyServerInfo, String> {
+    state.friendgate_auth.revoke_local_sub_key().await?;
+    let mut info = state
+        .info
+        .write()
+        .map_err(|_| "本地子 Key 状态不可用".to_string())?;
+    info.token.clear();
+    info.enabled = false;
+    Ok(info.clone())
+}
+
+pub fn start_proxy_server(
+    friendgate_auth: Arc<crate::services::friendgate_auth::FriendGateAuthManager>,
+) -> Result<Arc<ProxyServerState>, String> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .map_err(|err| format!("绑定本地代理端口失败：{err}"))?;
     listener
@@ -91,18 +142,28 @@ pub fn start_proxy_server() -> Result<Arc<ProxyServerState>, String> {
         .map_err(|err| format!("读取本地代理地址失败：{err}"))?;
 
     let state = Arc::new(ProxyServerState {
-        info: ProxyServerInfo {
+        info: RwLock::new(ProxyServerInfo {
             base_url: format!("http://{addr}"),
-            token: Uuid::new_v4().to_string(),
-        },
+            token: String::new(),
+            enabled: false,
+        }),
         client: reqwest::Client::builder()
             .no_proxy()
             .build()
             .map_err(|err| format!("创建本地代理 HTTP 客户端失败：{err}"))?,
+        friendgate_auth,
     });
 
     let app = Router::new()
         .route("/image-proxy", get(handle_image_proxy))
+        .route(
+            "/friendgate/v1/responses",
+            get(handle_friendgate_responses)
+                .post(handle_friendgate_proxy)
+                .options(handle_friendgate_proxy),
+        )
+        .route("/friendgate", any(handle_friendgate_proxy))
+        .route("/friendgate/{*rest}", any(handle_friendgate_proxy))
         .route("/proxy/{provider}", any(handle_proxy))
         .route("/proxy/{provider}/{*rest}", any(handle_proxy))
         .with_state(state.clone());
@@ -123,48 +184,290 @@ pub fn start_proxy_server() -> Result<Arc<ProxyServerState>, String> {
     Ok(state)
 }
 
-async fn handle_image_proxy(Query(query): Query<ImageProxyQuery>, headers: HeaderMap) -> Response {
-    let target_url = match validate_image_proxy_url(&query.url) {
-        Ok(url) => url,
-        Err(message) => return error_response(StatusCode::BAD_REQUEST, &message, &headers),
-    };
+fn local_sub_key_authorized(state: &ProxyServerState, headers: &HeaderMap) -> bool {
+    let local_token = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        })
+        .or_else(|| {
+            headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok())
+        });
+    state.friendgate_auth.runtime_authorized()
+        && local_token.is_some_and(|token| local_sub_key_matches(state, token))
+}
 
-    // 图片外链与商店链路同语义：恒随应用代理出网（未启用=直连，配置异常
-    // 502 fail fast）。<img> 请求无法携带自定义头，因此不走 per-request 开关。
-    let client = match crate::services::system_proxy::cached_client() {
-        Ok(client) => client,
+fn local_sub_key_matches(state: &ProxyServerState, token: &str) -> bool {
+    state
+        .info
+        .read()
+        .map(|info| {
+            info.enabled
+                && !info.token.is_empty()
+                && token.as_bytes().ct_eq(info.token.as_bytes()).into()
+        })
+        .unwrap_or(false)
+}
+
+async fn handle_friendgate_responses(
+    State(state): State<Arc<ProxyServerState>>,
+    headers: HeaderMap,
+    OriginalUri(original_uri): OriginalUri,
+    websocket: WebSocketUpgrade,
+) -> Response {
+    if !local_sub_key_authorized(&state, &headers) {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "Invalid Infinite AI local sub-key",
+            &headers,
+        );
+    }
+    let path_and_query = original_uri
+        .path_and_query()
+        .map(axum::http::uri::PathAndQuery::as_str)
+        .unwrap_or("/");
+    let Some(friendgate_path) = path_and_query.strip_prefix("/friendgate") else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid FriendGate relay path",
+            &headers,
+        );
+    };
+    if !friendgate_path.starts_with('/') || friendgate_path.starts_with("//") {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid FriendGate relay path",
+            &headers,
+        );
+    }
+    let requested_protocols = headers
+        .get("sec-websocket-protocol")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let upstream_request = match state
+        .friendgate_auth
+        .gateway_websocket_request(friendgate_path, requested_protocols.as_deref())
+        .await
+    {
+        Ok(request) => request,
+        Err(error) => return error_response(StatusCode::BAD_GATEWAY, &error, &headers),
+    };
+    let (upstream, response) = match tokio_tungstenite::connect_async(upstream_request).await {
+        Ok(result) => result,
         Err(error) => {
             return error_response(
                 StatusCode::BAD_GATEWAY,
-                &format!("App proxy unavailable: {error}"),
+                &format!("FriendGate WebSocket connection failed: {error}"),
                 &headers,
             );
         }
     };
-    let image_request = client
-        .get(target_url.clone())
-        .timeout(Duration::from_secs(IMAGE_PROXY_TIMEOUT_SECS));
+    let selected_protocol = response
+        .headers()
+        .get("sec-websocket-protocol")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let websocket = if let Some(protocol) = selected_protocol {
+        websocket.protocols([protocol])
+    } else {
+        websocket
+    };
+    websocket
+        .on_upgrade(move |client| relay_friendgate_websocket(client, upstream))
+        .into_response()
+}
 
-    let upstream_response = match apply_image_proxy_request_headers(image_request, &target_url)
-        .send()
+async fn relay_friendgate_websocket(
+    mut client: WebSocket,
+    mut upstream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+) {
+    loop {
+        tokio::select! {
+            client_message = client.recv() => {
+                let Some(Ok(message)) = client_message else { break; };
+                let converted = match message {
+                    AxumWebSocketMessage::Text(value) => UpstreamWebSocketMessage::Text(value.to_string().into()),
+                    AxumWebSocketMessage::Binary(value) => UpstreamWebSocketMessage::Binary(value.to_vec().into()),
+                    AxumWebSocketMessage::Ping(value) => UpstreamWebSocketMessage::Ping(value.to_vec().into()),
+                    AxumWebSocketMessage::Pong(value) => UpstreamWebSocketMessage::Pong(value.to_vec().into()),
+                    AxumWebSocketMessage::Close(_) => {
+                        let _ = upstream.send(UpstreamWebSocketMessage::Close(None)).await;
+                        break;
+                    }
+                };
+                if upstream.send(converted).await.is_err() { break; }
+            }
+            upstream_message = upstream.next() => {
+                let Some(Ok(message)) = upstream_message else { break; };
+                let converted = match message {
+                    UpstreamWebSocketMessage::Text(value) => AxumWebSocketMessage::Text(value.to_string().into()),
+                    UpstreamWebSocketMessage::Binary(value) => AxumWebSocketMessage::Binary(value.to_vec().into()),
+                    UpstreamWebSocketMessage::Ping(value) => AxumWebSocketMessage::Ping(value.to_vec().into()),
+                    UpstreamWebSocketMessage::Pong(value) => AxumWebSocketMessage::Pong(value.to_vec().into()),
+                    UpstreamWebSocketMessage::Close(_) => {
+                        let _ = client.send(AxumWebSocketMessage::Close(None)).await;
+                        break;
+                    }
+                    UpstreamWebSocketMessage::Frame(_) => continue,
+                };
+                if client.send(converted).await.is_err() { break; }
+            }
+        }
+    }
+    let _ = upstream.close(None).await;
+    let _ = client.send(AxumWebSocketMessage::Close(None)).await;
+}
+
+async fn handle_friendgate_proxy(
+    State(state): State<Arc<ProxyServerState>>,
+    method: Method,
+    headers: HeaderMap,
+    OriginalUri(original_uri): OriginalUri,
+    body: Body,
+) -> Response {
+    if method == Method::OPTIONS {
+        return preflight_response(&headers);
+    }
+    if !local_sub_key_authorized(&state, &headers) {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "Invalid Infinite AI local sub-key",
+            &headers,
+        );
+    }
+    let path_and_query = original_uri
+        .path_and_query()
+        .map(axum::http::uri::PathAndQuery::as_str)
+        .unwrap_or("/");
+    let Some(friendgate_path) = path_and_query.strip_prefix("/friendgate") else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid FriendGate relay path",
+            &headers,
+        );
+    };
+    let friendgate_path = if friendgate_path.is_empty() {
+        "/"
+    } else {
+        friendgate_path
+    };
+    if !friendgate_path.starts_with('/') || friendgate_path.starts_with("//") {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid FriendGate relay path",
+            &headers,
+        );
+    }
+    let body_bytes = match to_bytes(body, 64 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &format!("FriendGate request body is too large: {error}"),
+                &headers,
+            );
+        }
+    };
+    let mut upstream_headers = match build_upstream_request_headers(&headers) {
+        Ok(value) => value,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, &message, &headers),
+    };
+    for name in [
+        "authorization",
+        "x-api-key",
+        "x-infinite-device-timestamp",
+        "x-infinite-device-nonce",
+        "x-infinite-content-sha256",
+        "x-infinite-device-mac-hash",
+        "x-infinite-device-signature",
+    ] {
+        upstream_headers.remove(name);
+    }
+    let upstream = match state
+        .friendgate_auth
+        .forward_gateway_request(
+            method,
+            friendgate_path,
+            upstream_headers,
+            body_bytes.to_vec(),
+        )
         .await
     {
         Ok(response) => response,
+        Err(error) => return error_response(StatusCode::BAD_GATEWAY, &error, &headers),
+    };
+    let status = upstream.status();
+    let upstream_headers = upstream.headers().clone();
+    let body = Body::from_stream(upstream.bytes_stream());
+    let mut response = Response::builder()
+        .status(status)
+        .body(body)
+        .unwrap_or_else(|error| {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!(
+                    "Failed to build FriendGate response: {error}"
+                )))
+                .expect("FriendGate response fallback must succeed")
+        });
+    for (name, value) in &upstream_headers {
+        if should_forward_response_header(name) {
+            response.headers_mut().append(name, value.clone());
+        }
+    }
+    apply_cors_headers(response.headers_mut(), &headers);
+    response
+}
+
+async fn handle_image_proxy(
+    State(state): State<Arc<ProxyServerState>>,
+    Query(query): Query<ImageProxyQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.friendgate_auth.runtime_authorized()
+        || !local_sub_key_matches(&state, query.token.trim())
+    {
+        return image_proxy_error(
+            StatusCode::UNAUTHORIZED,
+            "Invalid Infinite AI local sub-key",
+        );
+    }
+    let target_url = match validate_image_proxy_url(&query.url) {
+        Ok(url) => url,
+        Err(message) => return image_proxy_error(StatusCode::BAD_REQUEST, &message),
+    };
+
+    // 图片外链与商店链路同语义：恒随应用代理出网（未启用=直连，配置异常
+    // 502 fail fast）。<img> 请求无法携带自定义头，因此不走 per-request 开关。
+    let client = match crate::services::system_proxy::cached_no_redirect_client() {
+        Ok(client) => client,
+        Err(error) => {
+            return image_proxy_error(
+                StatusCode::BAD_GATEWAY,
+                &format!("App proxy unavailable: {error}"),
+            );
+        }
+    };
+    let upstream_response = match fetch_image_proxy_response(&client, target_url).await {
+        Ok(response) => response,
         Err(err) => {
-            return error_response(
+            return image_proxy_error(
                 StatusCode::BAD_GATEWAY,
                 &format!("Failed to load image through local proxy: {err}"),
-                &headers,
             );
         }
     };
 
     let status = upstream_response.status();
     if !status.is_success() {
-        return error_response(
+        return image_proxy_error(
             StatusCode::BAD_GATEWAY,
             &format!("Image proxy upstream returned HTTP status {status}"),
-            &headers,
         );
     }
 
@@ -175,10 +478,9 @@ async fn handle_image_proxy(Query(query): Query<ImageProxyQuery>, headers: Heade
         .and_then(|value| value.parse::<usize>().ok())
     {
         if content_length > IMAGE_PROXY_MAX_BYTES {
-            return error_response(
+            return image_proxy_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "Image proxy response is too large",
-                &headers,
             );
         }
     }
@@ -191,37 +493,153 @@ async fn handle_image_proxy(Query(query): Query<ImageProxyQuery>, headers: Heade
     let bytes = match upstream_response.bytes().await {
         Ok(bytes) => bytes,
         Err(err) => {
-            return error_response(
+            return image_proxy_error(
                 StatusCode::BAD_GATEWAY,
                 &format!("Failed to read image proxy response: {err}"),
-                &headers,
             );
         }
     };
     if bytes.len() > IMAGE_PROXY_MAX_BYTES {
-        return error_response(
+        return image_proxy_error(
             StatusCode::PAYLOAD_TOO_LARGE,
             "Image proxy response is too large",
-            &headers,
         );
     }
 
     let mime_type = match resolve_image_proxy_mime(content_type.as_deref(), &bytes) {
         Ok(mime_type) => mime_type,
-        Err(message) => return error_response(StatusCode::BAD_GATEWAY, &message, &headers),
+        Err(message) => return image_proxy_error(StatusCode::BAD_GATEWAY, &message),
     };
 
     let mut response = Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", mime_type)
         .header("Content-Length", bytes.len().to_string())
-        .header("Cache-Control", "private, max-age=300")
+        .header("Cache-Control", "no-store, private")
+        .header("Content-Security-Policy", "default-src 'none'; sandbox")
         .header("X-Content-Type-Options", "nosniff")
+        .header("X-Frame-Options", "DENY")
         .header("Referrer-Policy", "no-referrer")
         .body(Body::from(bytes))
         .expect("image proxy response builder must succeed");
     apply_cors_headers(response.headers_mut(), &headers);
     response
+}
+
+fn image_proxy_error(status: StatusCode, message: &str) -> Response {
+    Response::builder()
+        .status(status)
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .header("Cache-Control", "no-store, private")
+        .header("Content-Security-Policy", "default-src 'none'; sandbox")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("X-Frame-Options", "DENY")
+        .header("Referrer-Policy", "no-referrer")
+        .body(Body::from(message.to_string()))
+        .expect("image proxy error response builder must succeed")
+}
+
+async fn fetch_image_proxy_response(
+    client: &reqwest::Client,
+    mut target_url: Url,
+) -> Result<reqwest::Response, String> {
+    for redirect in 0..=IMAGE_PROXY_MAX_REDIRECTS {
+        ensure_public_image_proxy_target(&target_url).await?;
+        let response = apply_image_proxy_request_headers(
+            client
+                .get(target_url.clone())
+                .timeout(Duration::from_secs(IMAGE_PROXY_TIMEOUT_SECS)),
+            &target_url,
+        )
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+        if !response.status().is_redirection() {
+            return Ok(response);
+        }
+        if redirect == IMAGE_PROXY_MAX_REDIRECTS {
+            return Err("image redirect limit exceeded".to_string());
+        }
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| "image redirect is missing a valid Location header".to_string())?;
+        target_url = target_url
+            .join(location)
+            .map_err(|error| format!("invalid image redirect URL: {error}"))?;
+        target_url = validate_image_proxy_url(target_url.as_str())?;
+    }
+    Err("image redirect limit exceeded".to_string())
+}
+
+async fn ensure_public_image_proxy_target(url: &Url) -> Result<(), String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "Image URL host is missing".to_string())?;
+    let normalized = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if normalized == "localhost" || normalized.ends_with(".localhost") {
+        return Err("Image proxy cannot access localhost".to_string());
+    }
+    if let Ok(address) = normalized.parse::<IpAddr>() {
+        return if is_public_image_proxy_ip(address) {
+            Ok(())
+        } else {
+            Err("Image proxy cannot access local or private addresses".to_string())
+        };
+    }
+
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "Image URL port is invalid".to_string())?;
+    let addresses: Vec<_> = tokio::net::lookup_host((normalized.as_str(), port))
+        .await
+        .map_err(|_| "Image URL host could not be resolved".to_string())?
+        .collect();
+    if addresses.is_empty()
+        || addresses
+            .iter()
+            .any(|address| !is_public_image_proxy_ip(address.ip()))
+    {
+        return Err("Image proxy cannot access local or private addresses".to_string());
+    }
+    Ok(())
+}
+
+fn is_public_image_proxy_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => is_public_image_proxy_ipv4(address),
+        IpAddr::V6(address) => is_public_image_proxy_ipv6(address),
+    }
+}
+
+fn is_public_image_proxy_ipv4(address: Ipv4Addr) -> bool {
+    let [a, b, c, _] = address.octets();
+    !(a == 0
+        || a == 10
+        || a == 127
+        || a >= 224
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 0 && c == 2)
+        || (a == 192 && b == 168)
+        || (a == 198 && (b == 18 || b == 19))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113))
+}
+
+fn is_public_image_proxy_ipv6(address: Ipv6Addr) -> bool {
+    if let Some(mapped) = address.to_ipv4_mapped() {
+        return is_public_image_proxy_ipv4(mapped);
+    }
+    let segments = address.segments();
+    (segments[0] & 0xe000) == 0x2000 && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
 }
 
 fn validate_image_proxy_url(raw: &str) -> Result<Url, String> {
@@ -270,17 +688,9 @@ fn normalize_image_proxy_mime(value: &str) -> Option<&'static str> {
         "image/gif" => Some("image/gif"),
         "image/webp" => Some("image/webp"),
         "image/bmp" => Some("image/bmp"),
-        "image/svg+xml" => Some("image/svg+xml"),
         "image/x-icon" | "image/vnd.microsoft.icon" => Some("image/x-icon"),
         _ => None,
     }
-}
-
-fn looks_like_svg(bytes: &[u8]) -> bool {
-    let prefix_len = bytes.len().min(1024);
-    let prefix = String::from_utf8_lossy(&bytes[..prefix_len]);
-    let trimmed = prefix.trim_start_matches('\u{feff}').trim_start();
-    trimmed.starts_with("<svg") || trimmed.contains("<svg")
 }
 
 fn infer_image_proxy_mime_from_bytes(bytes: &[u8]) -> Option<&'static str> {
@@ -301,9 +711,6 @@ fn infer_image_proxy_mime_from_bytes(bytes: &[u8]) -> Option<&'static str> {
     }
     if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
         return Some("image/x-icon");
-    }
-    if looks_like_svg(bytes) {
-        return Some("image/svg+xml");
     }
     None
 }
@@ -334,7 +741,9 @@ async fn handle_proxy(
     }
 
     match required_header(&headers, PROXY_TOKEN_HEADER) {
-        Ok(value) if value == state.info.token => {}
+        Ok(value)
+            if state.friendgate_auth.runtime_authorized()
+                && local_sub_key_matches(&state, value) => {}
         Ok(_) => return error_response(StatusCode::FORBIDDEN, "Invalid proxy token", &headers),
         Err(response) => return response,
     }
@@ -578,7 +987,9 @@ fn is_protected_upstream_override(name: &HeaderName) -> bool {
 
 /// 解出 x-liveagent-upstream-headers 覆盖包。畸形输入一律 Err（由调用方回 400）：
 /// 静默跳过会把「自定义请求头没生效」变成难查的偶发问题。
-fn decode_upstream_header_overrides(encoded: &str) -> Result<Vec<(HeaderName, HeaderValue)>, String> {
+fn decode_upstream_header_overrides(
+    encoded: &str,
+) -> Result<Vec<(HeaderName, HeaderValue)>, String> {
     if encoded.len() > UPSTREAM_HEADERS_MAX_BYTES {
         return Err(format!(
             "{UPSTREAM_HEADERS_HEADER} exceeds {UPSTREAM_HEADERS_MAX_BYTES} bytes"
@@ -592,8 +1003,10 @@ fn decode_upstream_header_overrides(encoded: &str) -> Result<Vec<(HeaderName, He
             "{UPSTREAM_HEADERS_HEADER} exceeds {UPSTREAM_HEADERS_MAX_BYTES} bytes"
         ));
     }
-    let parsed: serde_json::Map<String, Value> = serde_json::from_slice(&decoded)
-        .map_err(|error| format!("{UPSTREAM_HEADERS_HEADER} is not a valid JSON object: {error}"))?;
+    let parsed: serde_json::Map<String, Value> =
+        serde_json::from_slice(&decoded).map_err(|error| {
+            format!("{UPSTREAM_HEADERS_HEADER} is not a valid JSON object: {error}")
+        })?;
 
     let mut overrides = Vec::with_capacity(parsed.len());
     for (name, value) in parsed {
@@ -602,8 +1015,10 @@ fn decode_upstream_header_overrides(encoded: &str) -> Result<Vec<(HeaderName, He
                 "{UPSTREAM_HEADERS_HEADER} entry \"{name}\" must be a string"
             ));
         };
-        let header_name = HeaderName::from_bytes(name.to_ascii_lowercase().as_bytes())
-            .map_err(|_| format!("{UPSTREAM_HEADERS_HEADER} entry \"{name}\" is not a valid header name"))?;
+        let header_name =
+            HeaderName::from_bytes(name.to_ascii_lowercase().as_bytes()).map_err(|_| {
+                format!("{UPSTREAM_HEADERS_HEADER} entry \"{name}\" is not a valid header name")
+            })?;
         if is_protected_upstream_override(&header_name) {
             continue;
         }
@@ -735,6 +1150,38 @@ mod tests {
     }
 
     #[test]
+    fn image_proxy_rejects_non_public_addresses() {
+        for address in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.168.1.1",
+            "100.64.0.1",
+            "::1",
+            "fe80::1",
+            "fc00::1",
+            "2001:db8::1",
+        ] {
+            let address = address.parse::<IpAddr>().expect("test IP must parse");
+            assert!(!is_public_image_proxy_ip(address), "address={address}");
+        }
+        assert!(is_public_image_proxy_ip(
+            "1.1.1.1".parse().expect("public IPv4 must parse")
+        ));
+        assert!(is_public_image_proxy_ip(
+            "2606:4700:4700::1111"
+                .parse()
+                .expect("public IPv6 must parse")
+        ));
+    }
+
+    #[test]
+    fn image_proxy_does_not_accept_svg() {
+        assert!(resolve_image_proxy_mime(Some("image/svg+xml"), b"<svg></svg>").is_err());
+    }
+
+    #[test]
     fn builds_origin_referer_for_image_proxy_requests() {
         let url = validate_image_proxy_url("https://example.com:8443/path/photo.png?size=large")
             .expect("image proxy url should be valid");
@@ -831,12 +1278,18 @@ mod tests {
 
         let upstream_headers = build_upstream_request_headers(&headers).expect("overrides decode");
 
-        assert_eq!(header_str(&upstream_headers, "user-agent"), Some("codex_cli_rs/0.72.0"));
+        assert_eq!(
+            header_str(&upstream_headers, "user-agent"),
+            Some("codex_cli_rs/0.72.0")
+        );
         assert_eq!(
             header_str(&upstream_headers, CONTENT_TYPE),
             Some("application/custom+json")
         );
-        assert_eq!(header_str(&upstream_headers, "x-request-id"), Some("trace-1"));
+        assert_eq!(
+            header_str(&upstream_headers, "x-request-id"),
+            Some("trace-1")
+        );
         assert!(!upstream_headers.contains_key(UPSTREAM_HEADERS_HEADER));
     }
 

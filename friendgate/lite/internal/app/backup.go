@@ -32,6 +32,7 @@ import (
 const (
 	portableBackupMagic          = "FGLTBK01"
 	portableBackupPayloadMagic   = "FGLTDB01"
+	platformBackupPayloadMagic   = "FGLTPG01"
 	portableBackupVersion        = 1
 	portableBackupKDFIterations  = uint32(600_000)
 	portableBackupMaxIterations  = uint32(2_000_000)
@@ -49,6 +50,7 @@ var (
 	errInvalidPortableBackup      = errors.New("invalid portable backup")
 	errPortableAdminAuthorization = errors.New("portable backup administrator authorization expired")
 	errPortableBackupBansAdmin    = errors.New("portable backup bans the importing administrator")
+	errPortableAuthorityMismatch  = errors.New("portable backup authority does not match the active product database")
 	portableExportMu              sync.Mutex
 	portableImportMu              sync.Mutex
 )
@@ -85,6 +87,8 @@ var portableTableSpecs = []portableTableSpec{
 	{name: "api_keys", columns: []string{"id", "role", "key_hash", "key_enc", "masked_key", "account_id", "quota_requests", "used_requests", "status", "last_used_at", "created_at", "updated_at"}},
 	{name: "key_ips", columns: []string{"id", "key_id", "ip", "family", "device_note", "device_group", "created_at", "last_seen_at"}},
 	{name: "key_devices", optional: true, columns: []string{"id", "key_id", "device_token_hash", "device_note", "created_at", "last_seen_at"}},
+	{name: "desktop_users", optional: true, columns: []string{"id", "email", "display_name", "password_hash", "status", "api_key_id", "last_login_at", "created_at", "updated_at"}},
+	{name: "desktop_devices", optional: true, columns: []string{"id", "user_id", "public_key", "name", "platform", "mac_hash", "mac_enc", "registered_ip", "last_ip", "status", "last_seen_at", "created_at", "updated_at"}},
 	{name: "session_affinities", columns: []string{"key_id", "session_hash", "account_id", "expires_at", "last_used_at", "created_at"}},
 	{name: "invitations", columns: []string{"id", "role", "token_hash", "token_enc", "code_hash", "status", "account_id", "quota_requests", "expires_at", "verified_ip", "device_note", "binding_mode", "device_token_hash", "claim_session_hash", "probe_token_hash", "verified_at", "api_key_id", "generated_at", "reveal_until", "created_at"}},
 	{name: "invitation_ips", columns: []string{"invitation_id", "ip", "family", "created_at"}},
@@ -97,11 +101,12 @@ var portableTableSpecs = []portableTableSpec{
 }
 
 var portableDeleteOrder = []string{
+	"desktop_nonces", "desktop_sessions", "desktop_auth_flows", "user_sessions", "desktop_devices", "desktop_users",
 	"invitation_ips", "session_affinities", "key_ips", "key_devices", "invitations", "api_keys", "account_models", "account_model_snapshots", "accounts",
 	"usage_logs", "audit_logs", "security_events", "ip_failures", "status_failures", "banned_ips", "settings", "admin_sessions",
 }
 
-var portableSequenceTables = []string{"accounts", "api_keys", "key_ips", "key_devices", "invitations", "usage_logs", "audit_logs", "security_events"}
+var portableSequenceTables = []string{"accounts", "api_keys", "key_ips", "key_devices", "desktop_users", "desktop_devices", "invitations", "usage_logs", "audit_logs", "security_events"}
 
 // adminExportBackup is intended to be registered below adminOnly as:
 //
@@ -128,7 +133,16 @@ func (s *Server) adminExportBackup(w http.ResponseWriter, r *http.Request) {
 		portableExportMu.Unlock()
 		return
 	}
-	path, size, err := s.store.createPortableBackupFile(r.Context(), body.Passphrase, portableBackupDirectory(s))
+	backupTarget := "portable-v1"
+	var path string
+	var size int64
+	var err error
+	if platformPortalUsesPostgres(s) {
+		backupTarget = "platform-postgres-v1"
+		path, size, err = s.store.Platform().createPlatformPortableBackupFile(r.Context(), body.Passphrase, portableBackupDirectory(s))
+	} else {
+		path, size, err = s.store.createPortableBackupFile(r.Context(), body.Passphrase, portableBackupDirectory(s))
+	}
 	portableExportMu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "backup_export_failed", "创建加密备份失败")
@@ -143,7 +157,11 @@ func (s *Server) adminExportBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	filename := "friendgate-portable-" + time.Now().Format("20060102-150405") + ".fgbackup"
+	filenamePrefix := "friendgate-portable-"
+	if backupTarget == "platform-postgres-v1" {
+		filenamePrefix = "infinite-ai-platform-"
+	}
+	filename := filenamePrefix + time.Now().Format("20060102-150405") + ".fgbackup"
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
@@ -157,7 +175,7 @@ func (s *Server) adminExportBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSecurityRuntimeFailure("backup_export_stream", nil)
-	s.store.Audit(context.Background(), "admin", "backup.exported", "portable-v1", s.realIP(r), map[string]any{"bytes": size})
+	s.store.Audit(context.Background(), "admin", "backup.exported", backupTarget, s.realIP(r), map[string]any{"bytes": size})
 }
 
 // adminImportBackup is intended to be registered below adminOnly as:
@@ -196,6 +214,14 @@ func (s *Server) adminImportBackup(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, errPortableBackupBansAdmin) {
 			writeError(w, http.StatusConflict, "restore_would_ban_admin", "备份中的全局 IP 封禁会锁定当前管理员，已拒绝导入")
+			return
+		}
+		if errors.Is(err, errPortableAuthorityMismatch) {
+			writeError(w, http.StatusConflict, "backup_authority_mismatch", "备份所属数据库与当前产品权威不一致")
+			return
+		}
+		if errors.Is(err, ErrPlatformDatabaseUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "postgres_not_configured", "统一 PostgreSQL 数据库尚未配置")
 			return
 		}
 		if errors.Is(err, errInvalidPortableBackup) {
@@ -254,7 +280,7 @@ func (s *Server) authorizePortableBackupAdmin(w http.ResponseWriter, r *http.Req
 		return portableBackupAuthorization{}, false
 	}
 	provided := r.Header.Get("X-CSRF-Token")
-	if provided == "" || provided != csrf {
+	if provided == "" || subtleCompare(provided, csrf) != 1 {
 		writeError(w, http.StatusForbidden, "csrf_failed", "安全校验失败，请刷新页面")
 		return portableBackupAuthorization{}, false
 	}
@@ -523,8 +549,15 @@ func checkPortableSQLite(ctx context.Context, db *sql.DB) error {
 }
 
 func writePortableBackupEnvelope(output io.Writer, snapshotPath string, sourceMasterKey []byte, passphrase string) error {
+	return writePortableBackupEnvelopeWithMagic(output, snapshotPath, sourceMasterKey, passphrase, portableBackupPayloadMagic)
+}
+
+func writePortableBackupEnvelopeWithMagic(output io.Writer, snapshotPath string, sourceMasterKey []byte, passphrase, payloadMagic string) error {
 	if len(sourceMasterKey) != 32 {
 		return errors.New("source vault key is invalid")
+	}
+	if payloadMagic != portableBackupPayloadMagic && payloadMagic != platformBackupPayloadMagic {
+		return errors.New("portable backup payload magic is invalid")
 	}
 	snapshot, err := os.Open(snapshotPath)
 	if err != nil {
@@ -569,7 +602,7 @@ func writePortableBackupEnvelope(output io.Writer, snapshotPath string, sourceMa
 	}
 	inner := make([]byte, portableBackupInnerBytes)
 	defer zeroPortableBytes(inner)
-	copy(inner[:8], portableBackupPayloadMagic)
+	copy(inner[:8], payloadMagic)
 	copy(inner[8:40], sourceMasterKey)
 	binary.BigEndian.PutUint64(inner[40:48], uint64(info.Size()))
 	reader := io.MultiReader(bytes.NewReader(inner), snapshot)
@@ -630,12 +663,24 @@ func (s *Server) restorePortableBackupFile(ctx context.Context, uploadPath, pass
 }
 
 func (s *Server) restorePortableBackupFileAuthorized(ctx context.Context, uploadPath, passphrase string, authorization *portableBackupAuthorization) (portableRestoreSummary, error) {
-	snapshotPath, sourceMasterKey, err := decryptPortableBackupFile(uploadPath, passphrase, portableBackupDirectory(s))
+	snapshotPath, sourceMasterKey, payloadMagic, err := decryptPortableBackupPayload(uploadPath, passphrase, portableBackupDirectory(s))
 	if err != nil {
 		return portableRestoreSummary{}, err
 	}
 	defer os.Remove(snapshotPath)
 	defer zeroPortableBytes(sourceMasterKey)
+	if payloadMagic == platformBackupPayloadMagic {
+		if !platformPortalUsesPostgres(s) {
+			return portableRestoreSummary{}, ErrPlatformDatabaseUnavailable
+		}
+		return s.restorePlatformPortablePayloadAuthorized(ctx, snapshotPath, sourceMasterKey, authorization)
+	}
+	if payloadMagic != portableBackupPayloadMagic {
+		return portableRestoreSummary{}, errInvalidPortableBackup
+	}
+	if platformPortalUsesPostgres(s) {
+		return portableRestoreSummary{}, errPortableAuthorityMismatch
+	}
 
 	sourceVault, err := NewVault(sourceMasterKey)
 	if err != nil {
@@ -667,43 +712,16 @@ func (s *Server) restorePortableBackupFileAuthorized(ctx context.Context, upload
 	// drained, and only then may the single restore transaction begin. Therefore
 	// an old request can never append usage or account state after the new data
 	// commits. If draining times out, the target database is still untouched.
-	s.keyRequestMu.Lock()
-	if s.restoreInProgress {
-		s.keyRequestMu.Unlock()
-		return portableRestoreSummary{}, errBackupRestoreActive
-	}
-	s.restoreInProgress = true
-	requestDone := make([]<-chan struct{}, 0)
-	for keyID := range s.keyRequests {
-		requestDone = append(requestDone, s.cancelKeyRequestsLocked(keyID)...)
-	}
-	s.keyRequestMu.Unlock()
-	restoreGateLocked := false
-	defer func() {
-		s.keyRequestMu.Lock()
-		s.restoreInProgress = false
-		s.keyRequestMu.Unlock()
-		if restoreGateLocked {
-			s.restoreGate.Unlock()
-		}
-	}()
-
-	if err := waitKeyRequests(ctx, requestDone); err != nil {
-		s.setSecurityRuntimeFailure("backup_request_cancel", err)
+	requestDone, finishRestore, err := s.beginPortableRestoreGeneration(ctx)
+	if err != nil {
 		return portableRestoreSummary{}, err
 	}
-	s.setSecurityRuntimeFailure("backup_request_cancel", nil)
-	if err := s.lockPortableRestoreGate(ctx); err != nil {
-		s.setSecurityRuntimeFailure("backup_operation_drain", err)
-		return portableRestoreSummary{}, err
-	}
-	restoreGateLocked = true
-	s.setSecurityRuntimeFailure("backup_operation_drain", nil)
+	defer finishRestore()
 	if authorization != nil {
 		authCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		csrf, valid := s.store.AdminSession(authCtx, authorization.Token, authorization.IP)
 		cancel()
-		if !valid || csrf == "" || csrf != authorization.CSRF {
+		if !valid || csrf == "" || subtleCompare(csrf, authorization.CSRF) != 1 {
 			return portableRestoreSummary{}, errPortableAdminAuthorization
 		}
 	}
@@ -747,11 +765,64 @@ func (s *Server) restorePortableBackupFileAuthorized(ctx context.Context, upload
 		}
 	}
 	s.setSecurityConfig(securityConfig)
+	s.setDesktopPolicy(s.store.DesktopPolicy(runtimeCtx, s.cfg.PublicAPIURL))
 	s.setSecurityRuntimeFailure("backup_security_config", configErr)
 	banErr := s.refreshBanCache(runtimeCtx)
 	cancelRuntimeReload()
 	summary.CacheDegraded = configErr != nil || banErr != nil
 	return summary, nil
+}
+
+func (s *Server) beginPortableRestoreGeneration(ctx context.Context) ([]<-chan struct{}, func(), error) {
+	s.keyRequestMu.Lock()
+	if s.restoreInProgress {
+		s.keyRequestMu.Unlock()
+		return nil, func() {}, errBackupRestoreActive
+	}
+	s.restoreInProgress = true
+	requestDone := make([]<-chan struct{}, 0)
+	for keyID := range s.keyRequests {
+		requestDone = append(requestDone, s.cancelKeyRequestsLocked(keyID)...)
+	}
+	s.keyRequestMu.Unlock()
+
+	s.platformRequestMu.Lock()
+	for groupID, requests := range s.platformRequests {
+		cause := errPlatformKeyRevoked
+		if strings.HasPrefix(groupID, "user-session:") || strings.HasPrefix(groupID, "agent-device:") {
+			cause = errPlatformUserSessionRevoked
+		}
+		for _, request := range requests {
+			request.cancel(cause)
+			requestDone = append(requestDone, request.done)
+		}
+		delete(s.platformRequests, groupID)
+	}
+	s.platformRequestMu.Unlock()
+
+	restoreGateLocked := false
+	finish := func() {
+		s.keyRequestMu.Lock()
+		s.restoreInProgress = false
+		s.keyRequestMu.Unlock()
+		if restoreGateLocked {
+			s.restoreGate.Unlock()
+		}
+	}
+	if err := waitKeyRequests(ctx, requestDone); err != nil {
+		finish()
+		s.setSecurityRuntimeFailure("backup_request_cancel", err)
+		return nil, func() {}, err
+	}
+	s.setSecurityRuntimeFailure("backup_request_cancel", nil)
+	if err := s.lockPortableRestoreGate(ctx); err != nil {
+		finish()
+		s.setSecurityRuntimeFailure("backup_operation_drain", err)
+		return nil, func() {}, err
+	}
+	restoreGateLocked = true
+	s.setSecurityRuntimeFailure("backup_operation_drain", nil)
+	return requestDone, finish, nil
 }
 
 func (s *Server) lockPortableRestoreGate(ctx context.Context) error {
@@ -772,44 +843,57 @@ func (s *Server) lockPortableRestoreGate(ctx context.Context) error {
 }
 
 func decryptPortableBackupFile(uploadPath, passphrase, directory string) (snapshotPath string, sourceMasterKey []byte, resultErr error) {
+	snapshotPath, sourceMasterKey, payloadMagic, err := decryptPortableBackupPayload(uploadPath, passphrase, directory)
+	if err != nil {
+		return snapshotPath, sourceMasterKey, err
+	}
+	if payloadMagic != portableBackupPayloadMagic {
+		_ = os.Remove(snapshotPath)
+		zeroPortableBytes(sourceMasterKey)
+		return snapshotPath, nil, fmt.Errorf("%w: payload authority", errInvalidPortableBackup)
+	}
+	return snapshotPath, sourceMasterKey, nil
+}
+
+func decryptPortableBackupPayload(uploadPath, passphrase, directory string) (snapshotPath string, sourceMasterKey []byte, payloadMagic string, resultErr error) {
 	input, err := os.Open(uploadPath)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: open envelope", errInvalidPortableBackup)
+		return "", nil, "", fmt.Errorf("%w: open envelope", errInvalidPortableBackup)
 	}
 	defer input.Close()
 	header := make([]byte, portableBackupHeaderBytes)
 	if _, err := io.ReadFull(input, header); err != nil {
-		return "", nil, fmt.Errorf("%w: short envelope", errInvalidPortableBackup)
+		return "", nil, "", fmt.Errorf("%w: short envelope", errInvalidPortableBackup)
 	}
 	if string(header[:8]) != portableBackupMagic {
-		return "", nil, fmt.Errorf("%w: format", errInvalidPortableBackup)
+		return "", nil, "", fmt.Errorf("%w: format", errInvalidPortableBackup)
 	}
 	iterations := binary.BigEndian.Uint32(header[8:12])
 	if iterations < portableBackupKDFIterations || iterations > portableBackupMaxIterations {
-		return "", nil, fmt.Errorf("%w: KDF", errInvalidPortableBackup)
+		return "", nil, "", fmt.Errorf("%w: KDF", errInvalidPortableBackup)
 	}
 	nonceOffset := 12 + portableBackupSaltBytes
 	chunkOffset := nonceOffset + portableBackupNoncePrefixLen
 	chunkSize := binary.BigEndian.Uint32(header[chunkOffset : chunkOffset+4])
 	payloadSize := binary.BigEndian.Uint64(header[chunkOffset+4 : chunkOffset+12])
 	if chunkSize != portableBackupChunkBytes || payloadSize <= portableBackupInnerBytes || payloadSize > uint64(portableBackupMaxDatabase)+portableBackupInnerBytes {
-		return "", nil, fmt.Errorf("%w: envelope limits", errInvalidPortableBackup)
+		return "", nil, "", fmt.Errorf("%w: envelope limits", errInvalidPortableBackup)
 	}
 
 	derivedKey := pbkdf2SHA256([]byte(passphrase), header[12:12+portableBackupSaltBytes], int(iterations), 32)
 	defer zeroPortableBytes(derivedKey)
 	block, err := aes.NewCipher(derivedKey)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: cipher", errInvalidPortableBackup)
+		return "", nil, "", fmt.Errorf("%w: cipher", errInvalidPortableBackup)
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: cipher mode", errInvalidPortableBackup)
+		return "", nil, "", fmt.Errorf("%w: cipher mode", errInvalidPortableBackup)
 	}
 
 	snapshot, err := os.CreateTemp(directory, ".friendgate-restore-*.db")
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	snapshotPath = snapshot.Name()
 	defer func() {
@@ -820,7 +904,7 @@ func decryptPortableBackupFile(uploadPath, passphrase, directory string) (snapsh
 		}
 	}()
 	if err := snapshot.Chmod(0o600); err != nil {
-		return snapshotPath, nil, err
+		return snapshotPath, nil, "", err
 	}
 
 	remaining := payloadSize
@@ -833,40 +917,45 @@ func decryptPortableBackupFile(uploadPath, passphrase, directory string) (snapsh
 		}
 		var lengthRaw [4]byte
 		if _, err := io.ReadFull(input, lengthRaw[:]); err != nil {
-			return snapshotPath, nil, fmt.Errorf("%w: chunk length", errInvalidPortableBackup)
+			return snapshotPath, nil, "", fmt.Errorf("%w: chunk length", errInvalidPortableBackup)
 		}
 		ciphertextSize := binary.BigEndian.Uint32(lengthRaw[:])
 		if uint64(ciphertextSize) != plainSize+uint64(aead.Overhead()) {
-			return snapshotPath, nil, fmt.Errorf("%w: chunk size", errInvalidPortableBackup)
+			return snapshotPath, nil, "", fmt.Errorf("%w: chunk size", errInvalidPortableBackup)
 		}
 		ciphertext := make([]byte, ciphertextSize)
 		if _, err := io.ReadFull(input, ciphertext); err != nil {
 			zeroPortableBytes(ciphertext)
-			return snapshotPath, nil, fmt.Errorf("%w: truncated chunk", errInvalidPortableBackup)
+			return snapshotPath, nil, "", fmt.Errorf("%w: truncated chunk", errInvalidPortableBackup)
 		}
 		nonce := portableChunkNonce(header[nonceOffset:nonceOffset+portableBackupNoncePrefixLen], index)
 		aad := portableChunkAAD(header, index)
 		plain, err := aead.Open(nil, nonce, ciphertext, aad)
 		zeroPortableBytes(ciphertext)
 		if err != nil {
-			return snapshotPath, nil, fmt.Errorf("%w: authentication", errInvalidPortableBackup)
+			return snapshotPath, nil, "", fmt.Errorf("%w: authentication", errInvalidPortableBackup)
 		}
 		if index == 0 {
-			if len(plain) < portableBackupInnerBytes || string(plain[:8]) != portableBackupPayloadMagic {
+			if len(plain) < portableBackupInnerBytes {
 				zeroPortableBytes(plain)
-				return snapshotPath, nil, fmt.Errorf("%w: payload", errInvalidPortableBackup)
+				return snapshotPath, nil, "", fmt.Errorf("%w: payload", errInvalidPortableBackup)
+			}
+			payloadMagic = string(plain[:8])
+			if payloadMagic != portableBackupPayloadMagic && payloadMagic != platformBackupPayloadMagic {
+				zeroPortableBytes(plain)
+				return snapshotPath, nil, "", fmt.Errorf("%w: payload", errInvalidPortableBackup)
 			}
 			sourceMasterKey = append([]byte(nil), plain[8:40]...)
 			expectedDatabaseSize = binary.BigEndian.Uint64(plain[40:48])
 			if expectedDatabaseSize == 0 || expectedDatabaseSize > uint64(portableBackupMaxDatabase) || expectedDatabaseSize+portableBackupInnerBytes != payloadSize {
 				zeroPortableBytes(plain)
-				return snapshotPath, nil, fmt.Errorf("%w: database size", errInvalidPortableBackup)
+				return snapshotPath, nil, "", fmt.Errorf("%w: database size", errInvalidPortableBackup)
 			}
 			written, writeErr := snapshot.Write(plain[portableBackupInnerBytes:])
 			databaseWritten += uint64(written)
 			zeroPortableBytes(plain)
 			if writeErr != nil || written != len(plain)-portableBackupInnerBytes {
-				return snapshotPath, nil, errors.New("write restored SQLite snapshot")
+				return snapshotPath, nil, "", errors.New("write restored portable payload")
 			}
 		} else {
 			written, writeErr := snapshot.Write(plain)
@@ -874,25 +963,25 @@ func decryptPortableBackupFile(uploadPath, passphrase, directory string) (snapsh
 			plainLength := len(plain)
 			zeroPortableBytes(plain)
 			if writeErr != nil || written != plainLength {
-				return snapshotPath, nil, errors.New("write restored SQLite snapshot")
+				return snapshotPath, nil, "", errors.New("write restored portable payload")
 			}
 		}
 		remaining -= plainSize
 	}
 	if databaseWritten != expectedDatabaseSize {
-		return snapshotPath, nil, fmt.Errorf("%w: payload length", errInvalidPortableBackup)
+		return snapshotPath, nil, "", fmt.Errorf("%w: payload length", errInvalidPortableBackup)
 	}
 	var trailing [1]byte
 	if count, err := input.Read(trailing[:]); err != io.EOF || count != 0 {
-		return snapshotPath, nil, fmt.Errorf("%w: trailing data", errInvalidPortableBackup)
+		return snapshotPath, nil, "", fmt.Errorf("%w: trailing data", errInvalidPortableBackup)
 	}
 	if err := snapshot.Sync(); err != nil {
-		return snapshotPath, nil, err
+		return snapshotPath, nil, "", err
 	}
 	if err := snapshot.Close(); err != nil {
-		return snapshotPath, nil, err
+		return snapshotPath, nil, "", err
 	}
-	return snapshotPath, sourceMasterKey, nil
+	return snapshotPath, sourceMasterKey, payloadMagic, nil
 }
 
 func validatePortableSnapshot(ctx context.Context, source *sql.DB) error {
@@ -948,7 +1037,7 @@ func validatePortableSnapshot(ctx context.Context, source *sql.DB) error {
 func preflightPortableSnapshot(ctx context.Context, source *sql.DB, sourceVault *Vault, importingAdminIP string) error {
 	for _, spec := range portableTableSpecs {
 		switch spec.name {
-		case "settings", "accounts", "api_keys", "invitations":
+		case "settings", "accounts", "api_keys", "invitations", "desktop_devices":
 		default:
 			continue
 		}
@@ -1329,6 +1418,27 @@ func reencryptPortableRow(spec portableTableSpec, values []any, sourceVault, tar
 		status, statusOK := portableString(values[index["status"]])
 		if !ok || !statusOK || (plain != "" && tokenHash(plain) != hash) || ((status == "pending" || status == "verified") && plain == "") {
 			return fmt.Errorf("%w: invitation hash", errInvalidPortableBackup)
+		}
+		return nil
+	case "desktop_users":
+		hash, hashOK := portableString(values[index["password_hash"]])
+		status, statusOK := portableString(values[index["status"]])
+		if !hashOK || !statusOK || !validPortablePasswordHash(hash) || (status != "active" && status != "disabled") {
+			return fmt.Errorf("%w: desktop user", errInvalidPortableBackup)
+		}
+		return nil
+	case "desktop_devices":
+		if err := reencrypt("mac_enc", "desktop-device-mac"); err != nil {
+			return err
+		}
+		mac, err := targetVault.Decrypt(values[index["mac_enc"]].(string), "desktop-device-mac")
+		if err != nil {
+			return fmt.Errorf("%w: desktop device MAC", errInvalidPortableBackup)
+		}
+		hash, hashOK := portableString(values[index["mac_hash"]])
+		status, statusOK := portableString(values[index["status"]])
+		if !hashOK || !statusOK || tokenHash(mac) != hash || (status != "active" && status != "revoked") {
+			return fmt.Errorf("%w: desktop device", errInvalidPortableBackup)
 		}
 		return nil
 	case "settings":

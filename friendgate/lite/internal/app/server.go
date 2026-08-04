@@ -24,10 +24,15 @@ import (
 var webFiles embed.FS
 
 type Server struct {
-	cfg                Config
-	store              *Store
-	vault              *Vault
-	client             *http.Client
+	cfg    Config
+	store  *Store
+	vault  *Vault
+	client *http.Client
+	// platformClient uses the same DNS-rebinding-resistant dial policy as
+	// provider health checks. It is kept separate from the legacy ChatGPT
+	// transport because a tenant-configured compatible endpoint is untrusted
+	// configuration until every connection has been resolved and filtered.
+	platformClient     *http.Client
 	refreshLocks       sync.Map
 	metricsMu          sync.Mutex
 	lastCPU            cpuTimes
@@ -42,6 +47,8 @@ type Server struct {
 	lastLimitSweep     time.Time
 	securityMu         sync.RWMutex
 	security           SecurityConfig
+	desktopPolicyMu    sync.RWMutex
+	desktopPolicy      DesktopPolicy
 	securityRuntimeMu  sync.RWMutex
 	securityRuntime    map[string]securityRuntimeFailure
 	banSyncMu          sync.Mutex
@@ -53,20 +60,34 @@ type Server struct {
 	// writer. A portable restore takes the write side only after closing request
 	// admission, so stale work from the previous database generation cannot
 	// commit after restored rows become visible.
-	restoreGate  sync.RWMutex
-	keyRequestMu sync.Mutex
-	keyRequestID uint64
-	keyRequests  map[int64]map[uint64]activeKeyRequest
+	restoreGate       sync.RWMutex
+	keyRequestMu      sync.Mutex
+	keyRequestID      uint64
+	keyRequests       map[int64]map[uint64]activeKeyRequest
+	platformRequestMu sync.Mutex
+	platformRequestID uint64
+	platformRequests  map[string]map[uint64]activePlatformRequest
 	// restoreInProgress is protected by keyRequestMu. It closes admission while
 	// a portable restore drains the old request generation and replaces data.
 	restoreInProgress bool
 }
 
 type activeKeyRequest struct {
-	accountID int64
-	ip        string
-	cancel    context.CancelCauseFunc
-	done      <-chan struct{}
+	accountID        int64
+	ip               string
+	desktopUserID    int64
+	desktopDeviceID  int64
+	desktopSessionID int64
+	cancel           context.CancelCauseFunc
+	done             <-chan struct{}
+}
+
+type activePlatformRequest struct {
+	userID            string
+	upstreamAccountID string
+	ip                string
+	cancel            context.CancelCauseFunc
+	done              <-chan struct{}
 }
 
 type activeBan struct {
@@ -96,14 +117,16 @@ func NewServer(cfg Config, store *Store, vault *Vault) *Server {
 	transport.ForceAttemptHTTP2 = true
 	server := &Server{
 		cfg: cfg, store: store, vault: vault,
-		client:          &http.Client{Transport: transport},
-		oauthFlows:      make(map[string]*openAIOAuthFlow),
-		setupFlows:      make(map[string]*adminSetupFlow),
-		guideSessions:   make(map[string]guideSession),
-		limits:          make(map[string]*attemptWindow),
-		activeBans:      make(map[string]activeBan),
-		securityRuntime: make(map[string]securityRuntimeFailure),
-		keyRequests:     make(map[int64]map[uint64]activeKeyRequest),
+		client:           &http.Client{Transport: transport},
+		platformClient:   safeProviderHTTPClient(),
+		oauthFlows:       make(map[string]*openAIOAuthFlow),
+		setupFlows:       make(map[string]*adminSetupFlow),
+		guideSessions:    make(map[string]guideSession),
+		limits:           make(map[string]*attemptWindow),
+		activeBans:       make(map[string]activeBan),
+		securityRuntime:  make(map[string]securityRuntimeFailure),
+		keyRequests:      make(map[int64]map[uint64]activeKeyRequest),
+		platformRequests: make(map[string]map[uint64]activePlatformRequest),
 	}
 	// Store-side logging is used from proxy and invite goroutines which do not
 	// otherwise have a Server reference. Register the reporter before any
@@ -111,9 +134,32 @@ func NewServer(cfg Config, store *Store, vault *Vault) *Server {
 	// administrator health page instead of being confined to stderr.
 	store.SetRuntimeFailureReporter(server.setSecurityRuntimeFailure)
 	server.security = store.SecurityConfig(context.Background())
+	server.desktopPolicy = store.DesktopPolicy(context.Background(), cfg.PublicAPIURL)
 	server.refreshBanCache(context.Background())
 	server.lastCPU, _ = readCPUTimes()
 	return server
+}
+
+func (s *Server) currentDesktopPolicy() DesktopPolicy {
+	s.desktopPolicyMu.RLock()
+	defer s.desktopPolicyMu.RUnlock()
+	result := s.desktopPolicy
+	result.AllowedModels = append([]string(nil), result.AllowedModels...)
+	return result
+}
+
+func (s *Server) setDesktopPolicy(policy DesktopPolicy) {
+	mode := policy.ExternalAPIMode
+	if mode == "authenticated_public" && (!policy.PublicAPIEnabled || policy.OfficialDesktopOnly) {
+		mode = ""
+	}
+	policy.ExternalAPIMode = normalizeExternalAPIMode(mode, fmt.Sprint(policy.PublicAPIEnabled), fmt.Sprint(policy.OfficialDesktopOnly))
+	policy.PublicAPIEnabled = policy.ExternalAPIMode == "authenticated_public"
+	policy.OfficialDesktopOnly = policy.ExternalAPIMode == "official_client_only"
+	policy.AllowedModels = append([]string(nil), policy.AllowedModels...)
+	s.desktopPolicyMu.Lock()
+	s.desktopPolicy = policy
+	s.desktopPolicyMu.Unlock()
 }
 
 func RunMain() error {
@@ -142,8 +188,9 @@ func (s *Server) Run(ctx context.Context) error {
 		newHTTPServer(s.cfg.AdminAddr, s.commonHeaders("admin", s.adminHandler())),
 		newHTTPServer(s.cfg.InviteAddr, s.commonHeaders("invite", s.inviteHandler())),
 		newHTTPServer(s.cfg.GuideAddr, s.commonHeaders("guide", s.guideHandler())),
+		newHTTPServer(s.cfg.PortalAddr, s.commonHeaders("portal", s.portalHandler())),
 	}
-	labels := []string{"api", "admin", "invite", "guide"}
+	labels := []string{"api", "admin", "invite", "guide", "portal"}
 	errCh := make(chan error, len(servers))
 	for i, server := range servers {
 		go func(label string, srv *http.Server) {
@@ -214,7 +261,7 @@ func (s *Server) commonHeaders(surface string, next http.Handler) http.Handler {
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
-		if surface == "guide" {
+		if surface == "guide" || surface == "portal" {
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet, noimageindex")
 			w.Header().Set("Cache-Control", "no-store, private")
 		}
@@ -296,10 +343,19 @@ func (s *Server) staticHandler(name string) http.Handler {
 					}
 				}
 			}
-			// Vue's browser build compiles this embedded admin template at runtime.
-			// It therefore needs unsafe-eval even though every script is served from
-			// this binary under script-src 'self'; no third-party script is allowed.
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; connect-src "+strings.Join(connectSources, " ")+"; img-src 'self' data:; base-uri 'none'; form-action 'self'")
+			scriptSources := "'self'"
+			if name == "admin.html" {
+				// Vue's browser build compiles only the embedded administrator template
+				// at runtime. Keep unsafe-eval scoped to that one surface.
+				scriptSources += " 'unsafe-eval'"
+			}
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src "+scriptSources+"; connect-src "+strings.Join(connectSources, " ")+"; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		} else if name == "portal.html" && (strings.HasSuffix(r.URL.Path, ".css") || strings.HasSuffix(r.URL.Path, ".js")) {
+			// The public portal is frequently opened from a short-lived OAuth/device
+			// flow. Do not let an old stylesheet or script remain in a browser cache
+			// after a portal deployment; the HTML already carries a versioned asset
+			// URL and no-store makes Ctrl+F5 unnecessary for users.
+			w.Header().Set("Cache-Control", "no-store")
 		} else {
 			w.Header().Set("Cache-Control", "public,max-age=3600")
 		}

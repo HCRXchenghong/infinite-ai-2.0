@@ -7,7 +7,7 @@
 // relative or @tauri-apps/* imports are allowed here.
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternalUrl } from "../../../lib/desktopOpener";
 import {
   type MouseEvent as ReactMouseEvent,
   type UIEvent as ReactUIEvent,
@@ -848,7 +848,7 @@ export function GitReviewHistoryView(props: {
       setHistoryContextMenu(null);
       const url = gitHubCommitUrl(state.remoteUrl, commit.sha);
       if (!url) return;
-      void openUrl(url).catch((err) => {
+      void openExternalUrl(url).catch((err) => {
         setHistoryError(err instanceof Error ? err.message : String(err));
       });
     },

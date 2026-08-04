@@ -3,6 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import {
+  FriendGateLoginGate,
+  type FriendGateAuthState,
+} from "./components/FriendGateLoginGate";
 import { CliIdentityUpdateHost } from "./components/CliIdentityUpdateHost";
 import { CronPromptRunner } from "./components/cron/CronPromptRunner";
 import { Pin } from "./components/icons";
@@ -14,6 +18,8 @@ import { useAppUpdateController } from "./lib/appUpdates";
 import { initAutomation } from "./lib/automation";
 import {
   type AppSettings,
+  createProviderModelConfig,
+  getDefaultUsageQueryConfig,
   getDefaultSettings,
   getNextTheme,
   normalizeSettings,
@@ -167,6 +173,8 @@ function applyRuntimeSystemDefaults(settings: AppSettings, defaultWorkdir: strin
 }
 
 export default function App() {
+  const [friendGateAuth, setFriendGateAuth] = useState<FriendGateAuthState | null>(null);
+  const [friendGatePolicyReady, setFriendGatePolicyReady] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SectionId>("system");
   const [settingsReady, setSettingsReady] = useState(false);
@@ -176,6 +184,132 @@ export default function App() {
   });
   const [context, setContext] = useState<Context>(() => getDefaultContext());
   const [overlay, setOverlay] = useState<"closed" | "entering" | "open" | "leaving">("closed");
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    invoke<FriendGateAuthState>("friendgate_auth_state")
+      .then((state) => {
+        if (!cancelled) setFriendGateAuth(state);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setFriendGateAuth({
+            authenticated: false,
+            configured: false,
+            email: "",
+            displayName: "",
+            deviceName: "",
+            provisioned: false,
+            serverUrl: "",
+            error: asErrorMessage(error, "Infinite AI 登录模块初始化失败。"),
+          });
+        }
+      });
+    listen("friendgate:session-revoked", () => {
+      if (!cancelled) {
+        setFriendGateAuth((current) => ({
+          ...(current ?? {
+            configured: true,
+            email: "",
+            displayName: "",
+            deviceName: "",
+            serverUrl: "",
+            error: "",
+          }),
+          authenticated: false,
+          provisioned: false,
+          error: "该设备已从网页端退出，请重新登录。",
+        }));
+      }
+    })
+      .then((dispose) => {
+        if (cancelled) dispose();
+        else unlisten = dispose;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!settingsReady || !friendGateAuth?.authenticated || !friendGateAuth.provisioned) {
+      setFriendGatePolicyReady(false);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      invoke<{
+        providerName: string;
+        defaultModel: string;
+        allowedModels: string[];
+        systemPrompt: string;
+      }>("friendgate_policy"),
+      invoke<{ baseUrl: string; token: string }>("proxy_get_server_info"),
+    ])
+      .then(([policy, proxy]) => {
+        if (cancelled) return;
+        const modelIds = Array.from(
+          new Set(
+            [policy.defaultModel, ...(policy.allowedModels ?? [])]
+              .map((model) => model.trim())
+              .filter(Boolean),
+          ),
+        );
+        const defaultModel = policy.defaultModel.trim() || modelIds[0] || "gpt-5.6";
+        const providerId = "managed-friendgate";
+        const managed = normalizeSettings({
+          ...settingsRef.current,
+          customProviders: [
+            {
+              id: providerId,
+              name: policy.providerName.trim() || "Infinite AI FriendGate",
+              type: "codex",
+              baseUrl: `${proxy.baseUrl.replace(/\/$/, "")}/friendgate/v1`,
+              apiKey: proxy.token,
+              apiKeyConfigured: true,
+              customHeaders: [],
+              models: modelIds.map((model) => createProviderModelConfig("codex", model)),
+              modelOrder: modelIds,
+              activeModels: modelIds,
+              requestFormat: "openai-responses",
+              reasoning: "high",
+              promptCachingEnabled: true,
+              nativeWebSearchEnabled: true,
+              useSystemProxy: false,
+              usageQuery: getDefaultUsageQueryConfig(),
+            },
+          ],
+          selectedModel: { customProviderId: providerId, model: defaultModel },
+          agents: [],
+        });
+        settingsRef.current = managed;
+        setSettingsState(managed);
+        setContext((current) => ({
+          ...current,
+          systemPrompt: policy.systemPrompt.trim() || undefined,
+        }));
+        setFriendGatePolicyReady(true);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setFriendGateAuth((current) =>
+          current
+            ? {
+                ...current,
+                provisioned: false,
+                error: asErrorMessage(error, "读取 FriendGate 桌面策略失败。"),
+              }
+            : current,
+        );
+        setFriendGatePolicyReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [friendGateAuth?.authenticated, friendGateAuth?.provisioned, settingsReady]);
 
   const saveSequenceRef = useRef(0);
   const saveChainRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -568,7 +702,7 @@ export default function App() {
     };
   }, [queueSettingsSave, settingsReady]);
 
-  if (!settingsReady) {
+  if (!settingsReady || !friendGateAuth) {
     return (
       <LocaleContext.Provider value={localeContextValue}>
         <AppChrome>
@@ -577,6 +711,17 @@ export default function App() {
           </div>
         </AppChrome>
       </LocaleContext.Provider>
+    );
+  }
+
+  if (!friendGateAuth.authenticated || !friendGateAuth.provisioned || !friendGatePolicyReady) {
+    return (
+      <AppChrome>
+        <FriendGateLoginGate
+          initialState={friendGateAuth}
+          onAuthenticated={setFriendGateAuth}
+        />
+      </AppChrome>
     );
   }
 
@@ -616,6 +761,7 @@ export default function App() {
                 onBack={closeSettings}
                 initialSection={settingsSection}
                 appUpdate={appUpdate}
+                hiddenSections={["providers", "agents"]}
               />
             </AppErrorBoundary>
           </div>

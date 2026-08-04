@@ -80,9 +80,9 @@ desktop-build-linux: check-rust-target-$(DESKTOP_LINUX_TARGET)
 # 2.35). Set LINUX_APPIMAGE when using a different build output.
 desktop-build-linux-portable-deb:
 	@set -e; \
-	appimage="$${LINUX_APPIMAGE:-../../releases/linux/Infinite-AI-1.3.0-dev.0-x86_64.AppImage}"; \
-	output="$${LINUX_PORTABLE_DEB:-../../releases/linux/Infinite-AI-1.3.0-dev.0-ubuntu20.04-22.04-amd64.deb}"; \
-	"$(CURDIR)/scripts/release/create-universal-linux-deb.sh" "$$appimage" "$$output" "$${LIVEAGENT_APP_VERSION:-1.3.0-dev.0}"
+	appimage="$${LINUX_APPIMAGE:-../../releases/linux/Infinite-AI-2.0.0-x86_64.AppImage}"; \
+	output="$${LINUX_PORTABLE_DEB:-../../releases/linux/Infinite-AI-2.0.0-ubuntu20.04-22.04-amd64.deb}"; \
+	"$(CURDIR)/scripts/release/create-universal-linux-deb.sh" "$$appimage" "$$output" "$${INFINITE_AI_APP_VERSION:-2.0.0}"
 
 github-release-main: check-github-release-tag
 	git fetch origin --tags

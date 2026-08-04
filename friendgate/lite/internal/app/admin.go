@@ -31,6 +31,55 @@ func (s *Server) adminHandler() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("POST /api/logout", s.adminLogout)
 	api.HandleFunc("GET /api/dashboard", s.adminDashboard)
+	api.HandleFunc("GET /api/platform/overview", s.adminPlatformOverview)
+	api.HandleFunc("GET /api/platform/dashboard", s.adminPlatformDashboard)
+	api.HandleFunc("GET /api/platform/usage", s.adminListPlatformUsage)
+	api.HandleFunc("GET /api/platform/wallets", s.adminListPlatformWallets)
+	api.HandleFunc("POST /api/platform/users/{id}/wallets/{scope}/credit", s.adminCreditPlatformWallet)
+	api.HandleFunc("GET /api/platform/audits", s.adminListPlatformAudits)
+	api.HandleFunc("GET /api/platform/payments/providers", s.adminListPaymentProviders)
+	api.HandleFunc("POST /api/platform/payments/providers", s.adminCreatePaymentProvider)
+	api.HandleFunc("PATCH /api/platform/payments/providers/{id}", s.adminUpdatePaymentProvider)
+	api.HandleFunc("GET /api/platform/payments/orders", s.adminListPaymentOrders)
+	api.HandleFunc("POST /api/platform/legacy-import", s.adminPlatformLegacyImport)
+	api.HandleFunc("GET /api/platform/models", s.adminListPlatformModels)
+	api.HandleFunc("POST /api/platform/models", s.adminCreatePlatformModel)
+	api.HandleFunc("PUT /api/platform/models/{id}", s.adminUpdatePlatformModel)
+	api.HandleFunc("GET /api/platform/model-publications", s.adminListProductModelPublications)
+	api.HandleFunc("PUT /api/platform/model-publications", s.adminUpsertProductModelPublication)
+	api.HandleFunc("GET /api/platform/plans", s.adminListPlatformPlans)
+	api.HandleFunc("PUT /api/platform/plans/{code}/version", s.adminReplacePlatformPlanVersion)
+	api.HandleFunc("GET /api/platform/settings/registration", s.adminPlatformRegistrationMode)
+	api.HandleFunc("PUT /api/platform/settings/registration", s.adminSetPlatformRegistrationMode)
+	api.HandleFunc("GET /api/platform/users", s.adminListPlatformUsers)
+	api.HandleFunc("PATCH /api/platform/users/{id}", s.adminUpdatePlatformUser)
+	api.HandleFunc("GET /api/platform/devices", s.adminPlatformDevices)
+	api.HandleFunc("DELETE /api/platform/devices/{id}", s.adminRevokePlatformDevice)
+	api.HandleFunc("GET /api/platform/user-invitations", s.adminListPlatformInvitations)
+	api.HandleFunc("POST /api/platform/user-invitations", s.adminCreatePlatformInvitation)
+	api.HandleFunc("POST /api/platform/user-invitations/{id}/revoke", s.adminRevokePlatformInvitation)
+	api.HandleFunc("DELETE /api/platform/user-invitations/{id}", s.adminDeletePlatformInvitation)
+	api.HandleFunc("GET /api/platform/api-keys", s.adminListPlatformAPIKeys)
+	api.HandleFunc("POST /api/platform/api-keys", s.adminCreatePlatformAPIKey)
+	api.HandleFunc("POST /api/platform/api-keys/{id}/copy", s.adminCopyPlatformAPIKey)
+	api.HandleFunc("PATCH /api/platform/api-keys/{id}", s.adminUpdatePlatformAPIKey)
+	api.HandleFunc("DELETE /api/platform/api-keys/{id}", s.adminDeletePlatformAPIKey)
+	api.HandleFunc("GET /api/platform/route-pools", s.adminListRoutePools)
+	api.HandleFunc("POST /api/platform/route-pools", s.adminCreateRoutePool)
+	api.HandleFunc("GET /api/platform/providers", s.adminListProviderConnections)
+	api.HandleFunc("POST /api/platform/providers", s.adminCreateProviderConnection)
+	api.HandleFunc("POST /api/platform/providers/{id}/health", s.adminTestProviderConnection)
+	api.HandleFunc("PATCH /api/platform/providers/{id}", s.adminUpdateProviderConnection)
+	api.HandleFunc("DELETE /api/platform/providers/{id}", s.adminDeleteProviderConnection)
+	api.HandleFunc("GET /api/platform/upstream-accounts", s.adminListUpstreamAccounts)
+	api.HandleFunc("POST /api/platform/upstream-accounts", s.adminCreateUpstreamAccount)
+	api.HandleFunc("POST /api/platform/upstream-accounts/{id}/models/sync", s.adminSyncUpstreamAccountModels)
+	api.HandleFunc("GET /api/platform/upstream-accounts/{id}/models", s.adminListUpstreamAccountModels)
+	api.HandleFunc("PATCH /api/platform/upstream-accounts/{id}", s.adminUpdateUpstreamAccount)
+	api.HandleFunc("DELETE /api/platform/upstream-accounts/{id}", s.adminDeleteUpstreamAccount)
+	api.HandleFunc("POST /api/platform/route-pool-members", s.adminAddRoutePoolMember)
+	api.HandleFunc("GET /api/platform/route-targets", s.adminListRouteTargets)
+	api.HandleFunc("POST /api/platform/route-targets", s.adminCreateRouteTarget)
 	api.HandleFunc("GET /api/accounts", s.adminListAccounts)
 	api.HandleFunc("GET /api/accounts/models", s.adminAccountModels)
 	api.HandleFunc("POST /api/accounts/models/refresh", s.adminRefreshAccountModels)
@@ -62,6 +111,12 @@ func (s *Server) adminHandler() http.Handler {
 	api.HandleFunc("POST /api/system/password", s.adminChangePassword)
 	api.HandleFunc("POST /api/system/backup/export", s.adminExportBackup)
 	api.HandleFunc("POST /api/system/backup/import", s.adminImportBackup)
+	api.HandleFunc("GET /api/desktop/users", s.adminDesktopUsers)
+	api.HandleFunc("PATCH /api/desktop/users/{id}", s.adminUpdateDesktopUser)
+	api.HandleFunc("GET /api/desktop/devices", s.adminDesktopDevices)
+	api.HandleFunc("DELETE /api/desktop/devices/{id}", s.adminRevokeDesktopDevice)
+	api.HandleFunc("GET /api/desktop/policy", s.adminDesktopPolicy)
+	api.HandleFunc("PUT /api/desktop/policy", s.adminUpdateDesktopPolicy)
 	root.Handle("/api/", s.adminOnly(api))
 	root.Handle("/", s.staticHandler("admin.html"))
 	return root
@@ -92,7 +147,7 @@ func (s *Server) adminOnly(next http.Handler) http.Handler {
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if !sameOrigin(r) || r.Header.Get("X-CSRF-Token") == "" || r.Header.Get("X-CSRF-Token") != csrf {
+			if !sameOrigin(r) || r.Header.Get("X-CSRF-Token") == "" || subtleCompare(r.Header.Get("X-CSRF-Token"), csrf) != 1 {
 				writeError(w, http.StatusForbidden, "csrf_failed", "安全校验失败，请刷新页面")
 				return
 			}
@@ -130,12 +185,20 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, 16<<10, &body) {
 		return
 	}
-	if !s.store.AuthenticateAdmin(r.Context(), strings.TrimSpace(body.Username), body.Password, body.TOTPCode) {
+	username := strings.TrimSpace(body.Username)
+	accountAttemptKey := "admin-account:" + tokenHash(strings.ToLower(username))
+	if !s.allowAttempt(accountAttemptKey, 8, 10*time.Minute) {
+		s.store.Audit(r.Context(), "anonymous", "admin.login.throttled", "admin", ip, nil)
+		writeError(w, http.StatusTooManyRequests, "too_many_attempts", "登录失败次数过多，请稍后再试")
+		return
+	}
+	if !s.store.AuthenticateAdmin(r.Context(), username, body.Password, body.TOTPCode) {
 		s.store.Audit(r.Context(), "anonymous", "admin.login.failed", "admin", ip, nil)
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "账号、密码或动态验证码错误")
 		return
 	}
 	s.resetAttempts("admin:" + ip)
+	s.resetAttempts(accountAttemptKey)
 	token, csrf, err := s.store.NewAdminSession(r.Context(), ip, s.cfg.SessionTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "session_failed", "无法创建登录会话")
@@ -705,13 +768,14 @@ func (s *Server) adminUnban(w http.ResponseWriter, r *http.Request) {
 }
 
 func randomDigits(length int) (string, error) {
+	const digits = "0123456789"
 	result := make([]byte, length)
 	for i := range result {
 		n, err := rand.Int(rand.Reader, big.NewInt(10))
 		if err != nil {
 			return "", err
 		}
-		result[i] = byte('0' + n.Int64())
+		result[i] = digits[n.Int64()]
 	}
 	return string(result), nil
 }

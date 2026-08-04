@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#183f58">
-  <title>FriendGate · 管理后台</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#fafafa">
+  <title>Infinite AI · 管理后台</title>
+  <link rel="icon" href="/brand-logo.png" type="image/png">
+  <link rel="apple-touch-icon" href="/brand-logo.png">
   <link rel="stylesheet" href="/vendor/element-plus.css">
-  <link rel="stylesheet" href="/admin.css?v=20260801-person-logo-v1">
-  <link rel="stylesheet" href="/admin-theme.css?v=20260728-account-model-backup-v3">
+  <link rel="stylesheet" href="/admin.css?v=20260802-auth-ui-v3">
+  <link rel="stylesheet" href="/admin-theme.css?v=20260802-infinite-ui-v3">
 </head>
 <body>
   <div id="boot-fallback" class="boot-fallback" role="status" aria-live="polite">
@@ -17,11 +18,11 @@
   </div>
   <div id="app" v-cloak>
     <section v-if="!bootstrapped" class="setup-shell">
-      <div class="setup-card"><div class="setup-brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg></span><div><strong>正在验证后台状态</strong><span>读取管理员会话与 2FA 初始化状态</span></div></div></div>
+      <div class="setup-card"><div class="setup-brand"><span class="brand-mark" aria-hidden="true"><img src="/brand-logo.png" alt=""></span><div><strong>正在验证后台状态</strong><span>读取管理员会话与 2FA 初始化状态</span></div></div></div>
     </section>
     <section v-else-if="setupRequired" class="setup-shell">
       <div class="setup-card">
-        <div class="setup-brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg></span><div><strong>创建后台管理员</strong><span>此入口完成后将永久关闭</span></div></div>
+        <div class="setup-brand"><span class="brand-mark" aria-hidden="true"><img src="/brand-logo.png" alt=""></span><div><strong>创建后台管理员</strong><span>此入口完成后将永久关闭</span></div></div>
         <el-steps :active="setupStage" finish-status="success" align-center class="setup-steps"><el-step title="创建账号"></el-step><el-step title="绑定 2FA"></el-step><el-step title="完成"></el-step></el-steps>
         <div v-if="setupStage===0" class="setup-form">
           <el-alert title="请使用服务器部署时设置的初始化口令。管理员创建完成后，不能再次从此入口创建账号。" type="warning" :closable="false" show-icon></el-alert>
@@ -42,46 +43,34 @@
     </section>
 
     <section v-else-if="!authenticated" class="login-shell">
-      <div class="login-brief">
-        <div class="login-brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg></span><span>FriendGate</span></div>
-        <div class="login-hero">
-          <p class="eyebrow">PRIVATE AI GATEWAY</p>
-          <h1>稳定地管理每一个 ChatGPT 授权。</h1>
-          <p>面向小团队的 Codex 私有网关。账号、邀请、密钥与访问记录集中在一个清晰可控的后台。</p>
-          <div class="login-points">
-            <div><strong>真实额度同步</strong><span>Codex 额度与重置次数</span></div>
-            <div><strong>密钥会话隔离</strong><span>IPv4 / IPv6 双栈白名单</span></div>
-          </div>
-        </div>
-        <div class="login-foot">FriendGate Lite · 安全管理控制台</div>
-      </div>
       <div class="login-panel">
-        <el-card class="login-card">
-          <h2>登录管理后台</h2>
-          <p class="subline">使用管理员账号继续</p>
+        <el-card class="login-card admin-login-card">
+          <div class="login-logo-wrap"><img src="/brand-logo.png" alt="Infinite-AI"></div>
+          <div class="login-heading"><h1>Infinite AI 管理后台</h1><p>管理员登录需要账号、密码和 2FA 验证码。</p></div>
           <form @submit.prevent="login">
             <el-form label-position="top">
               <el-form-item label="管理员账号"><el-input v-model="loginForm.username" autocomplete="username" placeholder="管理员账号" @keyup.enter="login"></el-input></el-form-item>
-              <el-form-item label="管理员密码"><el-input v-model="loginForm.password" type="password" show-password autocomplete="current-password" placeholder="输入密码" @keyup.enter="login"></el-input></el-form-item>
-              <el-form-item label="Microsoft 动态验证码"><el-input v-model="loginForm.totp_code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" @keyup.enter="login"></el-input></el-form-item>
-              <el-button native-type="button" type="primary" :loading="loginLoading" class="full-button" @click="login">进入后台</el-button>
+              <el-form-item label="管理员密码"><el-input v-model="loginForm.password" type="password" show-password autocomplete="current-password" placeholder="密码" @keyup.enter="login"></el-input></el-form-item>
+              <el-form-item label="Microsoft 动态验证码"><el-input v-model="loginForm.totp_code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="2FA 验证码" @keyup.enter="login"></el-input></el-form-item>
+              <el-button native-type="button" type="primary" :loading="loginLoading" class="full-button" @click="login">登录后台</el-button>
               <el-alert v-if="loginError" :title="loginError" type="error" :closable="false" show-icon class="login-error"></el-alert>
             </el-form>
           </form>
-          <p class="login-note">登录会话与来源 IP 绑定；上游凭据仅以 AES-256-GCM 密文保存。</p>
         </el-card>
       </div>
     </section>
 
     <div v-else class="app-shell">
       <aside class="sidebar">
-        <div class="brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg></span><span class="brand-copy">FriendGate<small>PRIVATE GATEWAY</small></span></div>
+        <div class="brand"><span class="brand-mark" aria-hidden="true"><img src="/brand-logo.png" alt=""></span><span class="brand-copy">Infinite AI<small>ADMIN CONSOLE</small></span></div>
         <el-menu :default-active="tab" @select="selectTab">
           <el-menu-item index="dashboard"><span class="menu-prefix">01</span><span>仪表盘</span></el-menu-item>
           <el-menu-item index="accounts"><span class="menu-prefix">02</span><span>ChatGPT 账号</span></el-menu-item>
-          <el-menu-item index="invitations"><span class="menu-prefix">03</span><span>邀请管理</span></el-menu-item>
-          <el-menu-item index="keys"><span class="menu-prefix">04</span><span>API 密钥</span></el-menu-item>
-          <el-menu-item index="system"><span class="menu-prefix">05</span><span>系统与记录</span></el-menu-item>
+          <el-menu-item index="platform"><span class="menu-prefix">03</span><span>统一平台</span></el-menu-item>
+          <el-menu-item index="desktop"><span class="menu-prefix">04</span><span>Infinite AI 用户</span></el-menu-item>
+          <el-menu-item index="invitations"><span class="menu-prefix">05</span><span>邀请管理</span></el-menu-item>
+          <el-menu-item index="keys"><span class="menu-prefix">06</span><span>API 密钥</span></el-menu-item>
+          <el-menu-item index="system"><span class="menu-prefix">07</span><span>系统与记录</span></el-menu-item>
         </el-menu>
         <div class="mobile-nav"><el-segmented v-model="tab" :options="mobileTabs" @change="selectTab"></el-segmented></div>
         <div class="sidebar-bottom"><p>管理员：{{ username }}</p><el-button text :loading="logoutLoading" :disabled="logoutLoading" @click="logout">退出登录</el-button></div>
@@ -155,6 +144,110 @@
                 <el-table-column label="7 天额度" min-width="175"><template #default="scope"><div v-if="hasQuota(scope.row,'quota_7d_used')" class="quota-cell"><div class="quota-top"><span>已使用</span><strong>{{ quotaText(scope.row.quota_7d_used) }}</strong></div><el-progress :percentage="quotaPercent(scope.row.quota_7d_used)" :stroke-width="6" :show-text="false" :color="quotaColor(scope.row.quota_7d_used)"></el-progress><div class="quota-reset">{{ resetText(scope.row.quota_7d_reset_at) }}</div></div><span v-else class="quota-reset">尚无成功同步快照</span></template></el-table-column>
                 <el-table-column label="重置次数" min-width="145"><template #default="scope"><div v-if="scope.row.quota_updated_at" class="reset-credit"><strong>{{ scope.row.reset_credits || 0 }} 次可用</strong><span v-if="scope.row.reset_credit_times?.length" class="quota-reset">最近到期 {{ scope.row.reset_credit_times[0] }}</span><span v-else class="quota-reset">无可用到期记录</span></div><span v-else class="quota-reset">尚无成功同步快照</span></template></el-table-column>
                 <el-table-column label="操作" min-width="330" fixed="right"><template #default="scope"><div class="table-actions"><el-button size="small" :loading="accountRowLoading[String(scope.row.id)]==='refresh'" :disabled="!!accountRowLoading[String(scope.row.id)] && accountRowLoading[String(scope.row.id)]!=='refresh'" @click="refreshQuota(scope.row)">刷新额度</el-button><el-button size="small" :loading="accountRowLoading[String(scope.row.id)]==='reset'" :disabled="!(scope.row.reset_credits > 0) || (!!accountRowLoading[String(scope.row.id)] && accountRowLoading[String(scope.row.id)]!=='reset')" @click="resetQuota(scope.row)">使用重置</el-button><el-button size="small" :type="scope.row.active ? 'warning' : 'success'" plain :loading="accountRowLoading[String(scope.row.id)]==='toggle'" :disabled="!!accountRowLoading[String(scope.row.id)] && accountRowLoading[String(scope.row.id)]!=='toggle'" @click="toggleAccount(scope.row)">{{ scope.row.active ? '停用' : '启用' }}</el-button><el-button size="small" type="danger" plain :loading="accountRowLoading[String(scope.row.id)]==='delete'" :disabled="!!accountRowLoading[String(scope.row.id)] && accountRowLoading[String(scope.row.id)]!=='delete'" @click="deleteAccount(scope.row)">删除</el-button></div></template></el-table-column>
+              </el-table>
+            </el-card>
+          </section>
+
+          <section v-show="tab==='platform'" class="tab-panel">
+            <div class="page-toolbar"><div><h2>PostgreSQL 统一产品域</h2><p>这里的模型、发布、上游和新 API Key 是新网关的真实权威数据；旧页面不会替代或伪造它们。</p></div><div class="table-actions"><el-tag :type="platform.overview.healthy ? 'success' : 'warning'" effect="plain">{{ platform.overview.healthy ? '数据库已就绪' : '等待配置' }}</el-tag><el-button :loading="platform.loading" @click="loadPlatform">刷新</el-button></div></div>
+            <el-alert v-if="platform.error" :title="platform.error" type="warning" :closable="false" show-icon class="data-refresh-alert"></el-alert>
+            <template v-else-if="platform.loaded">
+              <div class="dashboard-metrics">
+                <el-card class="metric-card" shadow="never"><div class="metric-label">平台模型</div><div class="metric-value">{{ formatNumber(platform.overview.models || 0) }}</div><div class="metric-note">仅后台创建的稳定别名</div></el-card>
+                <el-card class="metric-card" shadow="never"><div class="metric-label">路由池</div><div class="metric-value">{{ formatNumber(platform.overview.route_pools || 0) }}</div><div class="metric-note">账号池隔离边界</div></el-card>
+                <el-card class="metric-card" shadow="never"><div class="metric-label">路由目标</div><div class="metric-value">{{ formatNumber(platform.overview.targets || 0) }}</div><div class="metric-note">多个上游可指向一个别名</div></el-card>
+                <el-card class="metric-card" shadow="never"><div class="metric-label">注册方式</div><div class="metric-value metric-value-small">{{ platform.registrationMode || '—' }}</div><div class="metric-note">默认邀请制</div></el-card>
+				<el-card class="metric-card" shadow="never"><div class="metric-label">今日真实调用</div><div class="metric-value">{{ formatNumber(platform.dashboard.today_requests || 0) }}</div><div class="metric-note">来自 PostgreSQL 用量记录</div></el-card>
+				<el-card class="metric-card" shadow="never"><div class="metric-label">今日 Token</div><div class="metric-value">{{ formatNumber(platform.dashboard.today_tokens || 0) }}</div><div class="metric-note">估算 {{ formatNumber(platform.dashboard.today_estimated || 0) }} 次</div></el-card>
+				<el-card class="metric-card" shadow="never"><div class="metric-label">今日错误</div><div class="metric-value">{{ formatNumber(platform.dashboard.today_errors || 0) }}</div><div class="metric-note">状态码 ≥ 400</div></el-card>
+				<el-card class="metric-card" shadow="never"><div class="metric-label">有效新 API Key</div><div class="metric-value">{{ formatNumber(platform.dashboard.active_api_keys || 0) }}</div><div class="metric-note">用户 {{ formatNumber(platform.dashboard.active_users || 0) }} · 设备 {{ formatNumber(platform.dashboard.active_devices || 0) }}</div></el-card>
+              </div>
+              <el-card class="surface-card table-card" shadow="never">
+                <template #header><div class="card-title"><h2>平台模型与产品发布</h2><span>前端只会看到已发布的别名</span><div class="table-actions"><el-button size="small" @click="createPlatformModel">创建模型</el-button><el-button size="small" type="primary" @click="publishPlatformModel">发布模型</el-button></div></div></template>
+                <el-table :data="platform.models" empty-text="尚未创建平台模型"><el-table-column prop="display_name" label="显示名称" min-width="160"></el-table-column><el-table-column prop="model_key" label="模型别名" min-width="180"></el-table-column><el-table-column prop="category" label="类别" width="120"></el-table-column><el-table-column prop="status" label="状态" width="100"></el-table-column><el-table-column prop="id" label="模型 ID" min-width="260"></el-table-column></el-table>
+                <el-divider content-position="left">产品发布</el-divider>
+                <el-table :data="platform.publications" empty-text="尚未发布到任何产品"><el-table-column prop="product_scope" label="产品" width="140"></el-table-column><el-table-column prop="protocol" label="协议" width="180"></el-table-column><el-table-column prop="model_id" label="平台模型 ID" min-width="300"></el-table-column><el-table-column label="状态" width="100"><template #default="scope"><el-tag :type="scope.row.enabled ? 'success' : 'info'" effect="plain">{{ scope.row.enabled ? '已发布' : '停用' }}</el-tag></template></el-table-column></el-table>
+              </el-card>
+			  <el-card class="surface-card table-card separated-card" shadow="never">
+				<template #header><div class="card-title"><h2>套餐与注册策略</h2><span>套餐版本只影响后续分配；Chat 与 Agent Token 永远分账</span><div class="table-actions"><el-button size="small" @click="setPlatformRegistrationMode">注册策略：{{ platform.registrationMode || 'invite_only' }}</el-button><el-button size="small" type="primary" @click="createPlatformUserInvitation">新建用户邀请</el-button></div></div></template>
+				<el-table :data="platform.plans" empty-text="未读取到套餐"><el-table-column prop="display_name" label="套餐" min-width="140"><template #default="scope"><strong>{{ scope.row.display_name }}</strong><div class="quota-reset">{{ scope.row.code }} · v{{ scope.row.current?.version || '—' }}</div></template></el-table-column><el-table-column label="月价" width="130"><template #default="scope">{{ scope.row.current?.currency || 'USD' }} {{ ((scope.row.current?.monthly_price_minor || 0) / 100).toFixed(2) }}</template></el-table-column><el-table-column label="Chat 月 Token" min-width="145"><template #default="scope">{{ formatNumber(scope.row.current?.chat_monthly_tokens || 0) }}</template></el-table-column><el-table-column label="Agent 月 Token" min-width="145"><template #default="scope">{{ formatNumber(scope.row.current?.agent_monthly_tokens || 0) }}</template></el-table-column><el-table-column label="五小时窗口" min-width="190"><template #default="scope">Chat {{ formatNumber(scope.row.current?.chat_rolling_5h_tokens || 0) }} / Agent {{ formatNumber(scope.row.current?.agent_rolling_5h_tokens || 0) }}</template></el-table-column><el-table-column prop="status" label="状态" width="100"></el-table-column><el-table-column label="操作" width="125" fixed="right"><template #default="scope"><el-button size="small" @click="updatePlatformPlan(scope.row)">编辑版本</el-button></template></el-table-column></el-table>
+				<el-divider content-position="left">用户邀请</el-divider>
+				<el-table :data="platform.invitations" empty-text="暂无 PostgreSQL 用户邀请"><el-table-column prop="role_label" label="备注 / 角色" min-width="180"></el-table-column><el-table-column prop="status" label="状态" width="105"></el-table-column><el-table-column label="过期" min-width="170"><template #default="scope">{{ when(scope.row.expires_at) }}</template></el-table-column><el-table-column label="已领取用户" min-width="250"><template #default="scope">{{ scope.row.claimed_by || '—' }}</template></el-table-column><el-table-column label="操作" width="185" fixed="right"><template #default="scope"><div class="table-actions"><el-button v-if="scope.row.status==='pending'" size="small" type="warning" plain @click="revokePlatformInvitation(scope.row)">撤销</el-button><el-button v-if="scope.row.status!=='pending'" size="small" type="danger" plain @click="deletePlatformInvitation(scope.row)">删除</el-button></div></template></el-table-column></el-table>
+			  </el-card>
+              <el-card class="surface-card table-card separated-card" shadow="never">
+                <template #header><div class="card-title"><h2>兼容上游与路由</h2><span>先创建连接、同步模型，再创建账号、路由池成员和目标</span><div class="table-actions"><el-button size="small" @click="createPlatformProvider">添加兼容上游</el-button><el-button size="small" @click="createPlatformUpstreamAccount">创建上游账号</el-button><el-button size="small" @click="createPlatformRoutePool">创建路由池</el-button><el-button size="small" @click="addPlatformRoutePoolMember">添加池成员</el-button><el-button size="small" type="primary" @click="createPlatformRouteTarget">创建路由目标</el-button></div></div></template>
+                <el-table :data="platform.providers" empty-text="尚未配置兼容上游"><el-table-column prop="provider_name" label="连接名称" min-width="160"></el-table-column><el-table-column prop="provider_kind" label="类型" min-width="170"></el-table-column><el-table-column prop="base_url" label="Base URL" min-width="280"></el-table-column><el-table-column label="状态" width="120"><template #default="scope"><el-tag :type="scope.row.status==='active' ? 'success' : 'info'" effect="plain">{{ scope.row.status }}</el-tag><div v-if="scope.row.last_error" class="quota-reset">{{ scope.row.last_error }}</div></template></el-table-column><el-table-column prop="id" label="连接 ID" min-width="260"></el-table-column><el-table-column label="操作" width="255" fixed="right"><template #default="scope"><div class="table-actions"><el-button size="small" @click="testPlatformProvider(scope.row)">测试</el-button><el-button size="small" :type="scope.row.status==='active' ? 'warning' : 'success'" plain @click="togglePlatformProvider(scope.row)">{{ scope.row.status==='active' ? '停用' : '启用' }}</el-button><el-button size="small" type="danger" plain @click="deletePlatformProvider(scope.row)">删除</el-button></div></template></el-table-column></el-table>
+                <el-divider content-position="left">账号与目标</el-divider>
+                <el-table :data="platform.upstreamAccounts" empty-text="尚未创建上游账号"><el-table-column prop="label" label="账号备注" min-width="180"></el-table-column><el-table-column prop="connection_id" label="连接 ID" min-width="240"></el-table-column><el-table-column label="状态 / 健康" min-width="145"><template #default="scope"><el-tag :type="scope.row.status==='active' ? 'success' : 'info'" effect="plain">{{ scope.row.status }}</el-tag><div class="quota-reset">健康 {{ Number(scope.row.health_score || 0).toFixed(0) }}%</div></template></el-table-column><el-table-column prop="id" label="账号 ID" min-width="260"></el-table-column><el-table-column label="操作" width="290" fixed="right"><template #default="scope"><div class="table-actions"><el-button size="small" @click="syncPlatformAccountModels(scope.row)">同步模型</el-button><el-button size="small" :type="scope.row.status==='active' ? 'warning' : 'success'" plain @click="togglePlatformUpstreamAccount(scope.row)">{{ scope.row.status==='active' ? '停用' : '启用' }}</el-button><el-button size="small" type="danger" plain @click="deletePlatformUpstreamAccount(scope.row)">删除</el-button></div></template></el-table-column></el-table>
+				<el-divider content-position="left">路由池</el-divider>
+				<el-table :data="platform.routePools" empty-text="尚未创建路由池"><el-table-column prop="name" label="路由池名称" min-width="180"></el-table-column><el-table-column prop="selection_policy" label="调度策略" min-width="145"></el-table-column><el-table-column prop="status" label="状态" width="110"></el-table-column><el-table-column prop="id" label="路由池 ID" min-width="290"></el-table-column></el-table>
+                <el-table :data="platform.routeTargets" empty-text="尚未创建路由目标" class="separated-table"><el-table-column prop="product_scope" label="产品" width="120"></el-table-column><el-table-column prop="protocol" label="协议" width="160"></el-table-column><el-table-column prop="upstream_model_id" label="私有上游模型 ID" min-width="210"></el-table-column><el-table-column prop="route_pool_id" label="路由池 ID" min-width="240"></el-table-column><el-table-column prop="model_id" label="平台模型 ID" min-width="240"></el-table-column></el-table>
+              </el-card>
+              <el-card class="surface-card table-card separated-card" shadow="never">
+                <template #header><div class="card-title"><h2>统一用户与新 API Key</h2><span>Key 使用独立 external_api 钱包，不会扣减 Chat / Agent 套餐</span><div class="table-actions"><el-button size="small" type="primary" @click="createPlatformAPIKey">创建 API Key</el-button></div></div></template>
+                <el-table :data="platform.users" empty-text="尚未注册统一用户"><el-table-column prop="display_name" label="用户" min-width="160"></el-table-column><el-table-column prop="email" label="邮箱" min-width="230"></el-table-column><el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="scope.row.status==='active' ? 'success' : 'danger'" effect="plain">{{ scope.row.status }}</el-tag></template></el-table-column><el-table-column prop="id" label="用户 ID" min-width="300"></el-table-column><el-table-column label="操作" width="140" fixed="right"><template #default="scope"><el-button size="small" :type="scope.row.status==='active' ? 'warning' : 'success'" plain @click="togglePlatformUser(scope.row)">{{ scope.row.status==='active' ? '停用' : '启用' }}</el-button></template></el-table-column></el-table>
+				<el-divider content-position="left">Agent 设备</el-divider>
+				<el-table :data="platform.devices" empty-text="尚无已授权 Agent 设备"><el-table-column label="用户 / 设备" min-width="235"><template #default="scope"><strong>{{ scope.row.device_name }}</strong><div class="quota-reset">{{ scope.row.user_email }} · {{ scope.row.platform }}</div></template></el-table-column><el-table-column prop="fingerprint" label="设备指纹" min-width="210"></el-table-column><el-table-column label="IP" min-width="220"><template #default="scope"><div><span class="device-note">登记</span><span class="ip-value ip-spaced">{{ scope.row.registered_ip || '—' }}</span></div><div><span class="device-note">最近</span><span class="ip-value ip-spaced">{{ scope.row.last_ip || '—' }}</span></div></template></el-table-column><el-table-column label="状态" width="145"><template #default="scope"><el-tag :type="scope.row.status==='active' ? 'success' : 'warning'" effect="plain">{{ scope.row.status }}</el-tag><div class="quota-reset">{{ scope.row.last_seen_at ? when(scope.row.last_seen_at) : '暂无心跳' }}</div></template></el-table-column><el-table-column label="操作" width="125" fixed="right"><template #default="scope"><el-button v-if="scope.row.status==='active'" size="small" type="danger" plain @click="revokePlatformDevice(scope.row)">撤销设备</el-button><span v-else class="quota-reset">需重新网页验证</span></template></el-table-column></el-table>
+				<el-divider content-position="left">钱包与手工充值</el-divider>
+				<el-table :data="platform.wallets" empty-text="尚无产品钱包"><el-table-column label="用户" min-width="180"><template #default="scope"><strong>{{ scope.row.display_name || scope.row.user_email }}</strong><div class="quota-reset">{{ scope.row.plan_code || '无有效套餐' }}</div></template></el-table-column><el-table-column prop="product_scope" label="产品" width="120"></el-table-column><el-table-column label="月度额度" min-width="210"><template #default="scope">{{ formatNumber(scope.row.monthly_used || 0) }} / {{ formatNumber(scope.row.monthly_granted || 0) }}<div class="quota-reset">剩余 {{ formatNumber(scope.row.monthly_remaining || 0) }} · {{ when(scope.row.monthly_ends_at) }}</div></template></el-table-column><el-table-column label="五小时额度" min-width="205"><template #default="scope">{{ formatNumber(scope.row.rolling_used || 0) }} / {{ formatNumber(scope.row.rolling_granted || 0) }}<div class="quota-reset">剩余 {{ formatNumber(scope.row.rolling_remaining || 0) }} · {{ when(scope.row.rolling_ends_at) }}</div></template></el-table-column><el-table-column label="操作" width="125" fixed="right"><template #default="scope"><el-button size="small" type="primary" plain @click="creditPlatformWallet(scope.row)">充值 Token</el-button></template></el-table-column></el-table>
+				<el-divider content-position="left">支付配置</el-divider>
+				<div class="card-title inline-section-heading"><h2>商户接入状态</h2><span>配置会加密保存；真实验签、下单、退款和对账通过前不会启用用户充值。</span><div class="table-actions"><el-button size="small" @click="createPaymentProvider">保存待验证配置</el-button></div></div>
+				<el-table :data="platform.paymentProviders" empty-text="尚未保存支付商户配置"><el-table-column prop="provider_type" label="类型" width="140"></el-table-column><el-table-column prop="merchant_id" label="商户号" min-width="190"></el-table-column><el-table-column label="配置" width="110"><template #default="scope"><el-tag :type="scope.row.has_configuration ? 'success' : 'info'" effect="plain">{{ scope.row.has_configuration ? '已加密' : '空' }}</el-tag></template></el-table-column><el-table-column label="状态" min-width="190"><template #default="scope"><el-tag :type="scope.row.enabled ? 'success' : 'info'" effect="plain">{{ scope.row.enabled ? '已启用' : '未启用' }}</el-tag><div class="quota-reset">{{ scope.row.last_error || scope.row.health_status }}</div></template></el-table-column><el-table-column prop="id" label="配置 ID" min-width="260"></el-table-column><el-table-column label="操作" width="120" fixed="right"><template #default="scope"><el-button size="small" plain @click="disablePaymentProvider(scope.row)">保持停用</el-button></template></el-table-column></el-table>
+				<el-divider content-position="left">支付订单</el-divider>
+				<el-table :data="platform.paymentOrders" empty-text="尚无支付订单"><el-table-column prop="created_at" label="创建时间" min-width="170"><template #default="scope">{{ when(scope.row.created_at) }}</template></el-table-column><el-table-column prop="order_no" label="订单号" min-width="220"></el-table-column><el-table-column prop="user_email" label="用户" min-width="200"></el-table-column><el-table-column prop="product_scope" label="产品" width="110"></el-table-column><el-table-column label="金额" min-width="130"><template #default="scope">{{ scope.row.currency }} {{ ((scope.row.amount_minor || 0) / 100).toFixed(2) }}</template></el-table-column><el-table-column prop="status" label="状态" width="110"></el-table-column><el-table-column prop="provider_trade_no" label="上游交易号" min-width="220"></el-table-column></el-table>
+                <el-divider content-position="left">新 API Key</el-divider>
+                <el-table :data="platform.apiKeys" empty-text="尚未创建新 API Key"><el-table-column prop="label" label="备注" min-width="160"></el-table-column><el-table-column prop="masked_key" label="密钥" min-width="190"></el-table-column><el-table-column prop="user_id" label="用户 ID" min-width="250"></el-table-column><el-table-column prop="status" label="状态" width="100"></el-table-column><el-table-column label="操作" width="275" fixed="right"><template #default="scope"><div class="table-actions"><el-button size="small" @click="copyPlatformKey(scope.row)">复制</el-button><el-button size="small" :type="scope.row.status==='active' ? 'warning' : 'success'" plain @click="togglePlatformKey(scope.row)">{{ scope.row.status==='active' ? '停用' : '启用' }}</el-button><el-button size="small" type="danger" plain @click="deletePlatformKey(scope.row)">删除</el-button></div></template></el-table-column></el-table>
+              </el-card>
+			  <el-card class="surface-card table-card separated-card" shadow="never">
+				<template #header><div class="card-title"><h2>真实调用与审计</h2><span>不保存原始请求/响应正文、Authorization、Cookie 或上游密钥</span></div></template>
+				<el-table :data="platform.dashboard.model_ranking || []" empty-text="今日尚无成功或失败调用"><el-table-column prop="model_key" label="模型" min-width="200"></el-table-column><el-table-column prop="requests" label="调用数" width="120"></el-table-column><el-table-column prop="tokens" label="Token" width="160"><template #default="scope">{{ formatNumber(scope.row.tokens || 0) }}</template></el-table-column><el-table-column prop="errors" label="错误" width="120"></el-table-column></el-table>
+				<el-divider content-position="left">最近调用（最多 100 条）</el-divider>
+				<el-table :data="platform.usage" empty-text="尚无统一平台调用记录"><el-table-column prop="created_at" label="时间" min-width="175"><template #default="scope">{{ when(scope.row.created_at) }}</template></el-table-column><el-table-column prop="product_scope" label="来源" width="120"></el-table-column><el-table-column prop="platform_model_key" label="模型" min-width="145"></el-table-column><el-table-column prop="user_email" label="用户" min-width="200"></el-table-column><el-table-column prop="status_code" label="状态" width="95"></el-table-column><el-table-column prop="billed_tokens" label="Token" width="120"><template #default="scope">{{ formatNumber(scope.row.billed_tokens || 0) }}<span v-if="scope.row.estimated" class="quota-reset">估算</span></template></el-table-column><el-table-column prop="duration_ms" label="耗时" width="105"><template #default="scope">{{ formatNumber(scope.row.duration_ms || 0) }} ms</template></el-table-column><el-table-column prop="error_code" label="错误码" min-width="175"></el-table-column></el-table>
+				<el-divider content-position="left">最近后台审计（最多 100 条）</el-divider>
+				<el-table :data="platform.audits" empty-text="尚无统一平台审计记录"><el-table-column prop="created_at" label="时间" min-width="180"><template #default="scope">{{ when(scope.row.created_at) }}</template></el-table-column><el-table-column prop="actor_kind" label="操作者" width="120"></el-table-column><el-table-column prop="action" label="动作" min-width="240"></el-table-column><el-table-column prop="target_kind" label="对象" min-width="145"></el-table-column><el-table-column prop="target_id" label="对象 ID" min-width="240"></el-table-column><el-table-column prop="ip" label="来源 IP" min-width="145"></el-table-column></el-table>
+			  </el-card>
+            </template>
+            <div v-else class="data-state-panel"><strong>正在读取 PostgreSQL 统一平台</strong><span>需要先配置数据库并完成迁移前检查；不会显示假数据。</span></div>
+          </section>
+
+          <section v-show="tab==='desktop'" class="tab-panel desktop-page">
+            <div class="page-toolbar"><div><h2>桌面登录与统一策略</h2><p>用户固定绑定一个外发 Key；Key 继续固定绑定一个 ChatGPT 账号。网页撤销设备或停用用户后，软件会立即退出。</p></div><el-tag type="primary" effect="plain">{{ desktopUsers.length }} 个用户 · {{ desktopDevices.filter(item => item.status==='active').length }} 台在线授权设备</el-tag></div>
+
+            <el-card class="surface-card desktop-policy-card" shadow="never">
+              <template #header><div class="card-title"><h2>Infinite AI 统一配置</h2><span>供应商、模型和系统提示词由后台控制</span></div></template>
+              <div class="desktop-switch-grid">
+                <div class="desktop-switch-item"><div><strong>允许注册新用户</strong><span>关闭后已有账号仍可登录</span></div><el-switch v-model="desktopPolicyForm.registration_enabled"></el-switch></div>
+                <div class="desktop-switch-item"><div><strong>外部 API 调用模式</strong><span>立即决定外发 Key 是否可访问网关；桌面端始终使用设备签名链路。</span></div><el-select v-model="desktopPolicyForm.external_api_mode" style="width:190px"><el-option label="有效 Key 公开调用" value="authenticated_public"></el-option><el-option label="仅 Infinite AI 软件" value="official_client_only"></el-option><el-option label="关闭外部 API" value="disabled"></el-option></el-select></div>
+              </div>
+              <el-form label-position="top" class="desktop-policy-form">
+                <div class="two-column-form">
+                  <el-form-item label="托管供应商名称"><el-input v-model="desktopPolicyForm.provider_name" maxlength="100"></el-input></el-form-item>
+                  <el-form-item label="默认模型"><el-select v-model="desktopPolicyForm.default_model" filterable allow-create style="width:100%"><el-option v-for="model in modelCatalogModels" :key="model.id" :label="model.id" :value="model.id"></el-option></el-select></el-form-item>
+                </div>
+                <el-form-item label="允许在软件中选择的模型"><el-select v-model="desktopPolicyForm.allowed_models" multiple filterable allow-create default-first-option collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="model in modelCatalogModels" :key="model.id" :label="model.id" :value="model.id"></el-option></el-select><div class="form-inline-note">留空时按每个用户绑定 Key 所属 ChatGPT 账号的真实模型目录下发。</div></el-form-item>
+                <el-form-item label="托管系统提示词"><el-input v-model="desktopPolicyForm.system_prompt" type="textarea" :rows="6" maxlength="65536" show-word-limit placeholder="留空表示不追加统一系统提示词"></el-input></el-form-item>
+                <div class="desktop-policy-footer"><span>桌面网关：{{ desktopPolicy.gateway_base_url || '等待读取' }}</span><el-button type="primary" :loading="desktopPolicySaving" @click="saveDesktopPolicy">保存统一配置</el-button></div>
+              </el-form>
+            </el-card>
+
+            <el-card class="surface-card table-card separated-card" shadow="never">
+              <template #header><div class="card-title"><h2>注册用户与额度归属</h2><span>取消 Key 授权后，用户仍能登录但不能进入 IDE</span></div></template>
+              <el-table :data="desktopUsers" empty-text="还没有 Infinite AI 注册用户">
+                <el-table-column label="用户" min-width="210"><template #default="scope"><strong>{{ scope.row.display_name }}</strong><div class="account-id">{{ scope.row.email }}</div><div class="quota-reset">用户 #{{ scope.row.id }} · 注册于 {{ when(scope.row.created_at) }}</div></template></el-table-column>
+                <el-table-column label="登录状态" width="125"><template #default="scope"><el-tag :type="scope.row.status==='active' ? 'success' : 'danger'" effect="plain">{{ scope.row.status==='active' ? '可登录' : '已停用' }}</el-tag><div class="quota-reset">{{ scope.row.last_login_at ? when(scope.row.last_login_at) : '从未登录' }}</div></template></el-table-column>
+                <el-table-column label="固定绑定 API Key" min-width="285"><template #default="scope"><el-select v-model="desktopUserKeyDrafts[String(scope.row.id)]" filterable style="width:100%" @change="markDesktopUserKeyDirty(scope.row)"><el-option label="不分配（禁止进入 IDE）" :value="0"></el-option><el-option v-for="item in desktopKeyOptions" :key="item.id" :label="`#${item.id} · ${item.role} · ${item.masked_key}`" :value="item.id" :disabled="item.status!=='active'"></el-option></el-select><div v-if="scope.row.key_role" class="quota-reset">当前角色：{{ scope.row.key_role }}</div></template></el-table-column>
+                <el-table-column label="操作" min-width="230" fixed="right"><template #default="scope"><div class="table-actions"><el-button size="small" type="primary" plain :loading="desktopUserRowLoading[String(scope.row.id)]==='key'" :disabled="!desktopUserKeyDirty[String(scope.row.id)] || !!desktopUserRowLoading[String(scope.row.id)]" @click="saveDesktopUserKey(scope.row)">保存授权</el-button><el-button size="small" :type="scope.row.status==='active' ? 'danger' : 'success'" plain :loading="desktopUserRowLoading[String(scope.row.id)]==='status'" :disabled="!!desktopUserRowLoading[String(scope.row.id)]" @click="toggleDesktopUser(scope.row)">{{ scope.row.status==='active' ? '停用并退登' : '重新启用' }}</el-button></div></template></el-table-column>
+              </el-table>
+            </el-card>
+
+            <el-card class="surface-card table-card separated-card" shadow="never">
+              <template #header><div class="card-title"><h2>已授权软件设备</h2><span>MAC 加密保存；真正鉴权使用本机 Ed25519 私钥签名</span></div></template>
+              <el-table :data="desktopDevices" empty-text="还没有完成网页登录的设备">
+                <el-table-column label="设备" min-width="210"><template #default="scope"><strong>{{ scope.row.name }}</strong><div class="quota-reset">{{ scope.row.platform || '未知平台' }} · 设备 #{{ scope.row.id }}</div><div class="account-id">{{ scope.row.user_email }}</div></template></el-table-column>
+                <el-table-column label="网卡 MAC" min-width="165"><template #default="scope"><span class="ip-value">{{ scope.row.mac || '未获取' }}</span></template></el-table-column>
+                <el-table-column label="网页 / 软件 IP" min-width="245"><template #default="scope"><div><span class="device-note">网页登录</span><span class="ip-value ip-spaced">{{ scope.row.registered_ip }}</span></div><div><span class="device-note">软件最近</span><span class="ip-value ip-spaced">{{ scope.row.last_ip || '—' }}</span></div></template></el-table-column>
+                <el-table-column label="状态" width="125"><template #default="scope"><el-tag :type="scope.row.status==='active' ? 'success' : 'info'" effect="plain">{{ scope.row.status==='active' ? '已授权' : '已撤销' }}</el-tag><div class="quota-reset">{{ scope.row.last_seen_at ? when(scope.row.last_seen_at) : '暂无心跳' }}</div></template></el-table-column>
+                <el-table-column label="操作" width="150" fixed="right"><template #default="scope"><el-button v-if="scope.row.status==='active'" size="small" type="danger" plain :loading="!!desktopDeviceRowLoading[String(scope.row.id)]" @click="revokeDesktopDevice(scope.row)">立即退登</el-button><span v-else class="quota-reset">需在软件重新登录</span></template></el-table-column>
               </el-table>
             </el-card>
           </section>
@@ -305,9 +398,9 @@
     </el-dialog>
 
     <el-dialog v-if="authenticated" v-model="backupImportDialogVisible" title="导入加密备份" width="min(600px,94vw)" class="backup-dialog" :close-on-click-modal="false" :close-on-press-escape="!backupImporting" :show-close="!backupImporting" @closed="resetBackupImportDialog">
-      <el-alert title="导入可能覆盖当前同标识数据。请先导出现有数据，并只选择可信来源的 FriendGate 备份；成功后将安全注销当前后台会话。" type="warning" :closable="false" show-icon class="backup-warning"></el-alert>
+      <el-alert title="导入可能覆盖当前同标识数据。请先导出现有数据，并只选择可信来源的 Infinite AI 备份；成功后将安全注销当前后台会话。" type="warning" :closable="false" show-icon class="backup-warning"></el-alert>
       <el-upload v-model:file-list="backupImportFiles" class="backup-upload" drag action="#" :auto-upload="false" :limit="1" accept=".fgbackup,.backup,.bin,application/octet-stream" :disabled="backupImporting" :on-change="backupFileChanged" :on-remove="backupFileRemoved" :on-exceed="backupFileExceeded">
-        <div class="backup-upload-copy"><strong>点击或拖拽备份文件到这里</strong><span>文件只会提交到当前 FriendGate 服务器进行完整性与密码校验</span></div>
+        <div class="backup-upload-copy"><strong>点击或拖拽备份文件到这里</strong><span>文件只会提交到当前 Infinite AI 服务器进行完整性与密码校验</span></div>
       </el-upload>
       <el-form label-position="top" class="backup-passphrase-form"><el-form-item label="备份解密密码"><el-input v-model="backupImportForm.passphrase" type="password" show-password autocomplete="current-password" :disabled="backupImporting" @keyup.enter="importBackup"></el-input></el-form-item></el-form>
       <template #footer><el-button :disabled="backupImporting" @click="backupImportDialogVisible=false">取消</el-button><el-button type="primary" :loading="backupImporting" :disabled="backupImporting || !backupImportFile || !backupImportForm.passphrase" @click="importBackup">校验并导入</el-button></template>
@@ -315,6 +408,6 @@
   </div>
   <script src="/vendor/vue.global.prod.js" defer></script>
   <script src="/vendor/element-plus.full.min.js" defer></script>
-  <script src="/admin.js?v=20260801-device-binding-v1" defer></script>
+  <script src="/admin.js?v=20260802-infinite-desktop-v2" defer></script>
 </body>
 </html>

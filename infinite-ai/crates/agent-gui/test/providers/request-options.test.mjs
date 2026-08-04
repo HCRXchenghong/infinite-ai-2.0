@@ -119,16 +119,20 @@ test("proxy base URL builder validates upstream URLs and carries origin separate
 
 test("image proxy URL builder encodes the source URL", () => {
   assert.equal(
-    proxy.buildImageProxyUrl("https://example.com/path/photo.png?size=large#view", "http://127.0.0.1:18080/"),
-    "http://127.0.0.1:18080/image-proxy?url=https%3A%2F%2Fexample.com%2Fpath%2Fphoto.png%3Fsize%3Dlarge%23view",
+    proxy.buildImageProxyUrl("https://example.com/path/photo.png?size=large#view", "http://127.0.0.1:18080/", "local-secret"),
+    "http://127.0.0.1:18080/image-proxy?url=https%3A%2F%2Fexample.com%2Fpath%2Fphoto.png%3Fsize%3Dlarge%23view&token=local-secret",
   );
   assert.throws(
-    () => proxy.buildImageProxyUrl("file:///tmp/photo.png", "http://proxy"),
+    () => proxy.buildImageProxyUrl("file:///tmp/photo.png", "http://proxy", "local-secret"),
     /http:\/\/ or https:\/\//,
   );
   assert.throws(
-    () => proxy.buildImageProxyUrl("https://user:pass@example.com/photo.png", "http://proxy"),
+    () => proxy.buildImageProxyUrl("https://user:pass@example.com/photo.png", "http://proxy", "local-secret"),
     /embedded username or password/,
+  );
+  assert.throws(
+    () => proxy.buildImageProxyUrl("https://example.com/photo.png", "http://proxy", ""),
+    /token is empty/,
   );
 });
 
